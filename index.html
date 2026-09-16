@@ -106,8 +106,10 @@
   .badge{font-size:10px; font-weight:600; padding:1px 6px; border-radius:4px; white-space:nowrap;}
   .banner .badge{margin-left:auto;}
   .banner .badge + .badge{margin-left:0;}
-  .b-P1{background:var(--red-bg); color:var(--red);} .b-P2{background:#fbeccb; color:#8a5a00;}
-  .b-P3{background:#e3ecf7; color:#2f5d8a;} .b-Poursuite{background:var(--soft); color:#57534e;}
+  .b-P1{background:#fde7e5; color:#b42318;}           /* rouge */
+  .b-P2{background:#ffe6d0; color:#b54708;}           /* orange */
+  .b-P3{background:#fff4b8; color:#7a5d00;}           /* jaune (texte foncé pour la lisibilité) */
+  .b-Poursuite{background:#efe6fb; color:#6b3fa0;}    /* violet */
   .badge.dd{background:var(--table); color:#fff;}
   
   .gantt{border-collapse:collapse; width:100%; table-layout:fixed; background:#fff;}
@@ -138,6 +140,10 @@
   .cbub:hover{background:#ffd24d;}
   .com{font-size:11px; color:#4a4f55; font-style:italic; margin:2px 0 4px; white-space:pre-wrap;}
   .com-edit{background:#f6f5f0; border:1px solid var(--line); border-radius:8px; padding:10px; margin-top:10px;}
+  .jr{list-style:none; margin:6px 0 8px; padding:0; max-height:220px; overflow:auto;}
+  .jr li{background:#fff; border:1px solid var(--line); border-radius:6px; padding:5px 8px; margin-bottom:4px;}
+  .jr .ja{font-size:11px; color:var(--muted); margin-bottom:2px;} .jr .ja b{color:var(--ink);}
+  .jr .jt{white-space:pre-wrap;}
   .com-edit textarea{width:100%; min-height:70px; font:inherit; padding:6px; border-radius:6px; border:1px solid #bdb9ad;}
   @media (max-width:900px){ .board{grid-template-columns:1fr 1fr;} }
 </style>
@@ -165,6 +171,7 @@
 <script>
 /* ================= Configuration ================= */
 const T = { GRP:'Groupement', COL:'Collaborateur', PRJ:'Projet', AFF:'Affectation' };
+const T_COM = 'Commentaires';                     // journal : Affectation (réf.), Texte, Auteur, Date
 const Q = ['T1 - 2027','T2 - 2027','T3 - 2027','T4 - 2027'];
 const QS = ['T1','T2','T3','T4'];                 // libellés courts
 const POIDS = { Faible:1, Fort:2 };
@@ -177,7 +184,7 @@ const PALETTE = ['#2f5d8a','#9b2c2c','#2e7d5b','#6b4fa0','#b3621b','#1f7a7a','#7
                  '#a33a6b','#44607f','#5b7f2e','#8a6d1f','#5a4e8c','#1b6f8f','#8b5e4a'];
 
 /* ================= État ================= */
-let grps=[], collabs=[], projets=[], affs=[], hasCollab=false, hasPrjCollab=false, hasPrio=false, hasDD=false, hasCom=false;
+let grps=[], collabs=[], projets=[], affs=[], hasCollab=false, hasPrjCollab=false, hasPrio=false, hasDD=false, hasCom=false, hasJournal=false, journal=[];
 let seuil = SEUIL_DEFAUT;
 let view = 'kanban';
 const F = { grp:0, col:0, prio:'', dd:'', txt:'' };  // filtres kanban : groupement, collaborateur
@@ -236,6 +243,16 @@ const chargeGrp = (g,q) => sum(affs.filter(a=>a.grp===g && a.q===q));
 const chargeCol = (c,q) => sum(affs.filter(a=>a.col===c && a.q===q));
 const lvl = v => v<=0 ? 'lvl-0' : !USE_SEUIL ? 'lvl-n' : v/seuil < .7 ? 'lvl-ok' : v<=seuil ? 'lvl-warn' : 'lvl-over';
 const lvlColor = v => ({'lvl-0':'#cfcfcf','lvl-ok':'var(--ok)','lvl-warn':'var(--warn)','lvl-over':'var(--over)'})[lvl(v)];
+const fmtDate = v => {
+  if(v === null || v === undefined || v === '') return '—';
+  if(typeof v === 'number'){
+    const d = new Date(v*1000);
+    return d.toLocaleDateString('fr-FR') + (d.getHours()||d.getMinutes() ? ' ' + d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}) : '');
+  }
+  return String(v);
+};
+// Actions de suppression d'affectations (+ entrées de journal liées)
+const rmAffs = list => list.flatMap(a => [...(a.jr||[]).map(e=>['RemoveRecord', T_COM, e.id]), ['RemoveRecord', T.AFF, a.id]]);
 const comHtml = a => a.com ? `<div class="com">💬 ${esc(a.com)}</div>` : '';
 const confirmCom = list => { const c = list.filter(a=>a.com); return !c.length ||
   confirm(`Cette suppression efface aussi ${c.length>1?'les commentaires':'le commentaire'} :\n\n${c.map(a=>'• '+a.com).join('\n')}\n\nContinuer ?`); };
@@ -253,7 +270,10 @@ async function loadAll(auto){
   try{
     const [g,c,p,a] = await Promise.all([T.GRP,T.COL,T.PRJ,T.AFF].map(t=>grist.docApi.fetchTable(t)));
     if(seq !== loadSeq) return;
-    const sig = JSON.stringify([g,c,p,a]);
+    let jc = null;
+    try{ jc = await grist.docApi.fetchTable(T_COM); }catch(e){ jc = null; }   // table journal facultative
+    if(seq !== loadSeq) return;
+    const sig = JSON.stringify([g,c,p,a,jc]);
     if(auto && sig === lastSig) return;               // rien n'a changé : pas de re-rendu
     lastSig = sig;
     grps = g.id.map((id,i)=>({id, nom:g.Groupement[i]||'(sans nom)'}));
@@ -266,8 +286,18 @@ async function loadAll(auto){
                                  dd: hasDD ? p.DDSIS[i]===DD_VAL : false}))
                .sort((x,y)=>x.nom.localeCompare(y.nom,'fr'));
     hasCollab = 'Collaborateur' in a; hasCom = 'Commentaire' in a;
+    hasJournal = !!(jc && 'Affectation' in jc && 'Texte' in jc);
+    journal = hasJournal ? jc.id.map((id,i)=>({id, aff:jc.Affectation[i], txt:(jc.Texte[i]||'').trim(),
+                  auteur: jc.Auteur ? (jc.Auteur[i]||'') : '', date: jc.Date ? jc.Date[i] : null}))
+                  .filter(e=>e.aff && e.txt).sort((x,y)=>(x.date||0)-(y.date||0) || x.id-y.id) : [];
     affs = a.id.map((id,i)=>({id, prj:a.Projet[i], grp:a.Groupement[i], col:hasCollab ? (a.Collaborateur[i]||0) : 0,
-                              q:a.Trimestre[i], imp:a.Impact[i], com: hasCom ? (a.Commentaire[i]||'').trim() : ''}));
+                              q:a.Trimestre[i], imp:a.Impact[i], old: hasCom ? (a.Commentaire[i]||'').trim() : ''}));
+    // Texte de commentaire consolidé (ancien commentaire + journal), utilisé par tous les affichages
+    affs.forEach(x => {
+      x.jr = journal.filter(e=>e.aff===x.id);
+      x.com = [x.old ? x.old : '', ...x.jr.map(e => `${e.auteur||'?'} (${fmtDate(e.date)}) : ${e.txt}`)].filter(Boolean).join('\n');
+    });
+    hasCom = hasCom || hasJournal;
     setStatus(hasCollab ? '' : "Colonne Affectation.Collaborateur absente : la distinction par collaborateur est désactivée.");
     render();
   }catch(err){
@@ -426,7 +456,7 @@ async function moveProject(prjId, from, to, copy){
   if(to === null){
     const src = visibleAffs(prjId, from);
     if(src.length && confirm(`Retirer « ${p.nom} » de ${from} (${src.length} affectation(s)) ?`) && confirmCom(src))
-      await act(src.map(a=>['RemoveRecord', T.AFF, a.id]));
+      await act(rmAffs(src));
     return;
   }
   // Première planification
@@ -444,8 +474,9 @@ async function moveProject(prjId, from, to, copy){
     const dup = affs.find(a=>a.prj===prjId && a.grp===s.grp && a.col===s.col && a.q===to);
     if(copy){ if(!dup) actions.push(addAff(prjId, s.grp, s.col, to, s.imp)); }
     else if(dup){
-      if(hasCom && s.com && s.com !== dup.com)
-        actions.push(['UpdateRecord', T.AFF, dup.id, {Commentaire: dup.com ? dup.com + '\n' + s.com : s.com}]);
+      if(s.old && s.old !== dup.old)
+        actions.push(['UpdateRecord', T.AFF, dup.id, {Commentaire: dup.old ? dup.old + '\n' + s.old : s.old}]);
+      (s.jr||[]).forEach(e => actions.push(['UpdateRecord', T_COM, e.id, {Affectation: dup.id}]));  // le journal suit
       actions.push(['RemoveRecord', T.AFF, s.id]);
     }
     else actions.push(['UpdateRecord', T.AFF, s.id, {Trimestre:to}]);
@@ -479,7 +510,7 @@ function renderModal(){
     Q.forEach((q,qi) => {
       const a = pa.find(x=>x.grp===g.id && !x.col && x.q===q);
       const nomi = pa.filter(x=>x.grp===g.id && x.col && x.q===q).length;
-      const cb = a && hasCom ? `<button class="cbtn ${a.com?'':'vide'}" data-com="${a.id}" title="${esc(a.com||'Ajouter un commentaire')}" aria-label="Commentaire">💬</button>` : '';
+      const cb = a && hasCom ? `<button class="cbtn ${a.com?'':'vide'}" data-com="${a.id}" title="${a.com ? 'Voir le journal' : 'Ajouter un commentaire'}" aria-label="Commentaire">💬</button>` : '';
       h += `<td class="c cell" tabindex="0" data-g="${g.id}" data-qi="${qi}">
         ${a ? `<span class="chip ${esc(a.imp)}">${esc(a.imp||'?')}</span>${cb}` : ''}
         ${nomi ? `<span class="nom" title="Affectations nominatives">${nomi}👤</span>` : ''}</td>`;
@@ -487,12 +518,25 @@ function renderModal(){
     h += `</tr>`;
   });
   h += `</table></div>`;
-  if(!hasCom) h += `<p class="hint">Ajoutez la colonne <b>Commentaire</b> (texte) dans la table Affectation pour activer les commentaires.</p>`;
+  if(!hasCom) h += `<p class="hint">Créez la table <b>Commentaires</b> dans Grist pour activer le journal des commentaires.</p>`;
   const ce = comEdit && affs.find(a=>a.id===comEdit && a.prj===p.id);
-  if(ce) h += `<div class="com-edit"><b>Commentaire — ${esc(gName(ce.grp))}${ce.col?' / '+esc(cName(ce.col)):''} — ${esc(ce.q)}</b>
-      <textarea id="comTxt">${esc(ce.com)}</textarea>
+  if(ce && hasJournal){
+    const items = [
+      ...(ce.old ? [`<li><div class="ja"><b>Commentaire initial</b></div><div class="jt">${esc(ce.old)}</div></li>`] : []),
+      ...ce.jr.map(e => `<li><div class="ja"><b>${esc(e.auteur||'Auteur inconnu')}</b> — ${esc(fmtDate(e.date))}</div><div class="jt">${esc(e.txt)}</div></li>`)
+    ];
+    h += `<div class="com-edit"><b>Journal des commentaires — ${esc(gName(ce.grp))}${ce.col?' / '+esc(cName(ce.col)):''} — ${esc(ce.q)}</b>
+      ${items.length ? `<ul class="jr">${items.join('')}</ul>` : `<p class="hint" style="margin:4px 0 8px">Aucun commentaire pour l'instant.</p>`}
+      <textarea id="comTxt" placeholder="Nouveau commentaire"></textarea>
+      <div class="row" style="margin:6px 0 0"><button class="primary" id="comSave">Ajouter au journal</button>
+      <button id="comCancel">Fermer le journal</button></div>
+      <p class="hint" style="margin:4px 0 0">Le nom et la date sont enregistrés automatiquement ; un commentaire ajouté n'est plus modifiable.</p></div>`;
+  } else if(ce){
+    h += `<div class="com-edit"><b>Commentaire — ${esc(gName(ce.grp))}${ce.col?' / '+esc(cName(ce.col)):''} — ${esc(ce.q)}</b>
+      <textarea id="comTxt">${esc(ce.old)}</textarea>
       <div class="row" style="margin:6px 0 0"><button class="primary" id="comSave">Enregistrer le commentaire</button>
       <button id="comCancel">Annuler</button></div></div>`;
+  }
 
   h += `<h3>Affectations nominatives</h3>`;
   if(!hasCollab){
@@ -502,7 +546,7 @@ function renderModal(){
     h += nom.length ? `<table class="grid"><tr><th>Collaborateur</th><th>Groupement</th><th>Trimestre</th><th>Impact</th>${hasCom?'<th>Commentaire</th>':''}<th></th></tr>` +
       nom.map(a=>`<tr><td>${esc(cName(a.col))}</td><td>${esc(gName(a.grp))}</td><td>${esc(a.q)}</td>
         <td><button data-cyc="${a.id}">${esc(a.imp||'?')}</button></td>
-        ${hasCom ? `<td><button class="cbtn ${a.com?'':'vide'}" data-com="${a.id}" aria-label="Commentaire">💬</button> <span class="nom">${esc(a.com)}</span></td>` : ''}
+        ${hasCom ? `<td><button class="cbtn ${a.com?'':'vide'}" data-com="${a.id}" aria-label="Commentaire">💬</button> <span class="nom">${esc(a.com.split('\n').slice(-1)[0])}</span></td>` : ''}
         <td><button class="danger" data-del="${a.id}">Retirer</button></td></tr>`).join('') + `</table>`
       : `<p class="hint" style="margin:0">Aucun collaborateur désigné nominativement.</p>`;
     h += `<div class="row" style="margin-top:8px">
@@ -525,20 +569,25 @@ function renderModal(){
       const a = pa.find(x=>x.grp===g && !x.col && x.q===q);
       if(!a) act([addAff(p.id, g, 0, q, 'Faible')]);
       else if(a.imp==='Faible') act([['UpdateRecord', T.AFF, a.id, {Impact:'Fort'}]]);
-      else if(confirmCom([a])) act([['RemoveRecord', T.AFF, a.id]]);
+      else if(confirmCom([a])) act(rmAffs([a]));
     };
     td.onclick = cyc; td.onkeydown = e => { if(e.key==='Enter'||e.key===' '){ e.preventDefault(); cyc(); } };
   });
   m.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
     const a = affs.find(x=>x.id===+b.dataset.del);
-    if(a && confirmCom([a])) act([['RemoveRecord', T.AFF, a.id]]);
+    if(a && confirmCom([a])) act(rmAffs([a]));
   });
   m.querySelectorAll('[data-com]').forEach(b => b.onclick = e => {
     e.stopPropagation(); comEdit = +b.dataset.com; renderModal();
     const t = $('#comTxt'); if(t){ t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
   });
   if(ce){
-    const saveCom = v => { comEdit = null; act([['UpdateRecord', T.AFF, ce.id, {Commentaire: v}]]); };
+    const saveCom = v => {
+      if(hasJournal){
+        if(!v){ $('#comTxt').focus(); return; }
+        act([['AddRecord', T_COM, null, {Affectation: ce.id, Texte: v}]]);   // le journal reste ouvert
+      } else { comEdit = null; act([['UpdateRecord', T.AFF, ce.id, {Commentaire: v}]]); }
+    };
     $('#comSave').onclick = () => saveCom($('#comTxt').value.trim());
     $('#comCancel').onclick = () => { comEdit = null; renderModal(); };
   }
