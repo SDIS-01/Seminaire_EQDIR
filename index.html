@@ -71,6 +71,7 @@
 
   /* Grilles */
   table.grid{border-collapse:collapse; width:100%; background:#fff;}
+  table.grid.fixed{table-layout:fixed;} table.grid.fixed td{overflow-wrap:anywhere;}
   .grid th,.grid td{border:1px solid var(--line); padding:5px 7px; text-align:left; vertical-align:top;}
   .grid th{background:var(--soft); font-weight:600; font-size:12px;}
   .grid td.c{text-align:center; vertical-align:middle;}
@@ -196,7 +197,7 @@ let lastSig = '';                                   // signature des données af
 let dragging = false;
 let comEdit = null;                                 // id d'affectation dont le commentaire est en cours d'édition
 const P = { mode:'porteur', g:'all', open:new Set() }; // open : commentaires dépliés              // options P2A
-const S = { type:'prio', val:'all' };               // état priorité / DDSIS
+const S = { type:'prio', val:'all', open:new Set() }; // open : commentaires dépliés               // état priorité / DDSIS
 
 /* ================= Utilitaires ================= */
 const $ = s => document.querySelector(s);
@@ -641,7 +642,7 @@ function sheetGroupement(g){
   let h = `<div class="sheet"><h2>État du groupement ${esc(g.nom)}</h2><div class="meta">Planning 2027 — édité le ${today()}</div>`;
   if(!list.length) h += `<p class="empty">Aucun projet n'impacte ce groupement.</p>`;
   else {
-    h += `<table class="grid"><tr><th>Projet</th><th>Porteur</th>${QS.map(s=>`<th>${s}</th>`).join('')}</tr>`;
+    h += `<table class="grid fixed"><colgroup><col style="width:28%"><col style="width:16%">${QS.map(()=>'<col style="width:14%">').join('')}</colgroup><tr><th>Projet</th><th>Porteur</th>${QS.map(s=>`<th>${s}</th>`).join('')}</tr>`;
     list.forEach(p => {
       h += `<tr><td>${esc(p.nom)} ${prioBadge(p)} ${ddBadge(p)}</td><td>${porteurTxt(p)}</td>`;
       Q.forEach(q => h += `<td>${cellList(ga.filter(a=>a.prj===p.id && a.q===q), hasCollab)}</td>`);
@@ -658,7 +659,7 @@ function sheetCollab(c){
   const list = projets.filter(p=>prjIds.includes(p.id) && matchPD(p)).sort(byPrio);
   let h = `<div class="sheet"><h2>État de ${esc(c.nom)}</h2><div class="meta">Groupement ${esc(gName(c.grp))} — planning 2027 — édité le ${today()}</div>`;
   if(!list.length) return h + `<p class="empty">Aucun projet ne concerne ce collaborateur.</p></div>`;
-  h += `<table class="grid"><tr><th>Projet</th><th>Porteur</th>${QS.map(s=>`<th>${s}</th>`).join('')}</tr>`;
+  h += `<table class="grid fixed"><colgroup><col style="width:28%"><col style="width:16%">${QS.map(()=>'<col style="width:14%">').join('')}</colgroup><tr><th>Projet</th><th>Porteur</th>${QS.map(s=>`<th>${s}</th>`).join('')}</tr>`;
   list.forEach(p => {
     h += `<tr><td>${esc(p.nom)} ${prioBadge(p)} ${ddBadge(p)}</td><td>${porteurTxt(p)}</td>`;
     Q.forEach(q => {
@@ -725,19 +726,24 @@ function sheetListe(titre, meta, list){
   if(!list.length) return h + `<p class="empty">Aucun projet.</p></div>`;
   const ids = new Set(list.map(p=>p.id));
   const la = affs.filter(a=>ids.has(a.prj));
-  h += `<table class="grid"><tr><th>Projet</th><th>Porteur</th>${QS.map(s=>`<th>${s}</th>`).join('')}</tr>`;
+  h += `<table class="grid fixed"><colgroup><col style="width:28%"><col style="width:16%">${QS.map(()=>'<col style="width:14%">').join('')}</colgroup><tr><th>Projet</th><th>Porteur</th>${QS.map(s=>`<th>${s}</th>`).join('')}</tr>`;
   list.forEach(p => {
     h += `<tr><td>${esc(p.nom)} ${prioBadge(p)} ${ddBadge(p)}</td><td>${porteurTxt(p)}</td>`;
     Q.forEach(q => {
       const by = {};
       const cm = {};
-      la.filter(a=>a.prj===p.id && a.q===q).forEach(a => { if(!by[a.grp] || a.imp==='Fort') by[a.grp] = a.imp; if(a.com) (cm[a.grp] = cm[a.grp]||[]).push(a.com); });
-      h += `<td>${Object.entries(by).map(([g,imp])=>`<div class="tag" style="display:inline-block;margin:1px" ${cm[g]?`title="${esc(cm[g].join('\n'))}"`:''}>${esc(gName(+g))} <b class="${esc(imp)}">${esc((imp||'?').toLowerCase())}</b>${cm[g]?' 💬':''}</div>`).join('')}</td>`;
+      la.filter(a=>a.prj===p.id && a.q===q).forEach(a => { if(!by[a.grp] || a.imp==='Fort') by[a.grp] = a.imp; if(a.com) (cm[a.grp] = cm[a.grp]||[]).push((a.col ? cName(a.col)+' : ' : '') + a.com); });
+      const qi = Q.indexOf(q);
+      h += `<td>${Object.entries(by).map(([g,imp]) => {
+        const key = `${p.id}|${qi}|${g}`, open = S.open.has(key);
+        return `<div class="tag ${open?'hl':''}" style="display:inline-block;margin:1px">${esc(gName(+g))} <b class="${esc(imp)}">${esc((imp||'?').toLowerCase())}</b>${cm[g]?`<span class="cbub scb" data-key="${key}" role="button" tabindex="0" title="Afficher le commentaire">💬</span>`:''}</div>`
+             + (open && cm[g] ? `<div class="gcom" style="margin:2px 0 4px">${esc(gName(+g))} — ${esc(cm[g].join('\n'))}</div>` : '');
+      }).join('')}</td>`;
     });
     h += `</tr>`;
   });
   h += `<tr><th colspan="2">Total des points</th>${Q.map(q=>`<td class="c"><b>${sum(la.filter(a=>a.q===q))}</b></td>`).join('')}</tr></table>`;
-  return h + `<p class="legend">Faible = 1 pt, Fort = 2 pts. Total cumulé de tous les groupements impactés.</p></div>`;
+  return h + `<p class="legend">Faible = 1 pt, Fort = 2 pts. Total cumulé de tous les groupements impactés. Clic sur 💬 : affiche ou masque le commentaire (les commentaires affichés sont imprimés).</p></div>`;
 }
 function viewEtatPrio(){
   if(!hasPrio && !hasDD) return `<p class="empty">Ajoutez les colonnes Priorite et/ou DDSIS dans la table Projet pour utiliser cet état.</p>`;
@@ -764,6 +770,10 @@ function viewEtatPrio(){
   }
   setTimeout(() => {
     $('#sType').onchange = e => { S.type = e.target.value; S.val = 'all'; render(); };
+    document.querySelectorAll('.scb').forEach(b => {
+      const tg = e => { e.preventDefault(); const k = b.dataset.key; S.open.has(k) ? S.open.delete(k) : S.open.add(k); render(); };
+      b.onclick = tg; b.onkeydown = e => { if(e.key==='Enter'||e.key===' ') tg(e); };
+    });
     if($('#sVal')) $('#sVal').onchange = e => { S.val = e.target.value; render(); };
   });
   return h;
@@ -793,7 +803,7 @@ function ganttCells(list, color){
         return `<span class="gchip ${open?'open':''}">${esc(gName(+g))} : <b class="${esc(k.imp)}">${esc(k.imp)}</b>${k.noms.length?` <span class="nm">(${esc(k.noms.join(', '))})</span>`:''}${k.coms.length?`<span class="cbub gcb" data-key="${key}" role="button" tabindex="0" title="Afficher le commentaire">💬</span>`:''}</span>`
              + (open && k.coms.length ? `<div class="gcom">${esc(gName(+g))} — ${esc(k.coms.join('\n'))}</div>` : '');
       }).join('');
-    return `<td class="q"><div class="bar ${cls}" style="background:${bg}"></div><div class="gchips">${chips}</div></td>`;
+    return `<td class="q"><div class="gchips">${chips}</div></td>`;
   }).join('');
 }
 function sheetP2A(g){
@@ -816,8 +826,7 @@ function sheetP2A(g){
     h += `<tr class="prow"><td><div class="pn">${esc(p.nom)} ${prioBadge(p)} ${ddBadge(p)}</div><div class="pm">${meta}</div></td>
       ${ganttCells(pa, P.mode==='porteur' ? color : gColor(p.porteur))}</tr>`;
   });
-  h += `</table><p class="legend">Barre pleine : au moins un impact fort sur le trimestre ; barre claire : impacts faibles uniquement.
-    ${P.mode==='porteur' ? "Intensité maximale tous groupements impactés confondus." : "Intensité propre au groupement ; couleur de la barre = groupement porteur."}
+  h += `</table><p class="legend">${P.mode==='porteur' ? "Une bulle par groupement impacté sur le trimestre." : "Impact propre au groupement de la page."}
     Clic sur 💬 : affiche ou masque le commentaire (les commentaires affichés sont imprimés).</p></div>`;
   return h;
 }
