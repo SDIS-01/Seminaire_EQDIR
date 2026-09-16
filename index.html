@@ -41,13 +41,18 @@
   .gauge{height:6px; background:#fff; border-radius:3px; overflow:hidden; margin:-2px 0 8px;}
   .gauge i{display:block; height:100%;}
   .gauge-lbl{font-size:11px; margin:-4px 0 8px;}
-  .card{background:var(--paper); border-radius:8px; padding:8px 9px 8px 13px; margin-bottom:8px; cursor:grab; position:relative;
+  .card{background:var(--paper); border-radius:8px; padding:0; margin-bottom:8px; cursor:grab; position:relative; overflow:hidden;
         box-shadow:0 1px 0 #cfccc2, 0 2px 4px rgba(40,50,45,.08); border:1px solid #e3e0d7;}
-  .card::before{content:""; position:absolute; left:0; top:0; bottom:0; width:5px; border-radius:8px 0 0 8px; background:var(--suit);}
+  .banner{background:var(--suit); color:#fff; padding:4px 9px; font-size:11px; font-weight:600; display:flex; gap:6px; align-items:baseline; flex-wrap:wrap;}
+  .banner .flag{font-size:10px;} .banner .who{font-weight:400; opacity:.9;}
+  .card .body{padding:7px 9px 8px;}
+  .k{font-size:10px; color:var(--muted); margin:6px 0 3px;}
   .card:active{cursor:grabbing;}
   .card .t{font-weight:600; margin-bottom:5px; line-height:1.25;}
   .suit{display:inline-block; font-size:10px; font-weight:600; padding:1px 6px; border-radius:10px; color:#fff; background:var(--suit);}
-  .chips{display:flex; flex-wrap:wrap; gap:4px; margin-top:6px;}
+  .chips{display:flex; flex-wrap:wrap; gap:4px;}
+  .tag{font-size:10px; padding:1px 6px; border-radius:4px; border:1px solid #bdb9ad; background:#fff; white-space:nowrap;}
+  .tag b.Fort{color:var(--over);} .tag b.Faible{color:var(--warn);}
   .chip{font-size:10px; padding:1px 6px; border-radius:10px; border:1px solid var(--line); background:#fff; white-space:nowrap;}
   .chip.Fort{border-color:#e1b3ae; background:var(--over-bg); color:var(--over); font-weight:600;}
   .chip.Faible{border-color:#e8d3a4; background:var(--warn-bg); color:var(--warn);}
@@ -127,10 +132,10 @@ const PALETTE = ['#1f6fb2','#c0392b','#2e8b57','#8e44ad','#d35400','#16a085','#7
                  '#b8336a','#3d5a80','#6a994e','#bc6c25','#5e548e','#0081a7','#9c6644'];
 
 /* ================= État ================= */
-let grps=[], collabs=[], projets=[], affs=[], hasCollab=false;
+let grps=[], collabs=[], projets=[], affs=[], hasCollab=false, hasPrjCollab=false;
 let seuil = SEUIL_DEFAUT;
 let view = 'kanban';
-const F = { porteur:0, impacte:0, collab:0 };      // filtres kanban
+const F = { porteur:0, pcol:0, impacte:0, collab:0 }; // filtres kanban (pcol = collaborateur porteur)
 let modalPrj = null;                                // id projet ouvert
 let chargeOpen = new Set();
 const E = { type:'grp', id:'all', prj:'all' };      // sélection des états
@@ -142,6 +147,8 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const gName = id => (grps.find(g=>g.id===id)||{}).nom || '—';
 const cName = id => (collabs.find(c=>c.id===id)||{}).nom || '—';
 const pObj  = id => projets.find(p=>p.id===id);
+const porteurTxt = p => esc(gName(p.porteur)) + (p.pcol ? ` <span class="nom">(${esc(cName(p.pcol))})</span>` : '');
+const matchPorteur = p => (!F.porteur || p.porteur===F.porteur) && (!F.pcol || p.pcol===F.pcol);
 const gColor = id => { const i = grps.findIndex(g=>g.id===id); return i<0 ? '#8a8a8a' : PALETTE[i % PALETTE.length]; };
 const pts = a => POIDS[a.imp] || 0;
 const sum = arr => arr.reduce((s,a)=>s+pts(a),0);
@@ -167,7 +174,9 @@ async function loadAll(){
     grps = g.id.map((id,i)=>({id, nom:g.Groupement[i]||'(sans nom)'}));
     collabs = c.id.map((id,i)=>({id, nom:c.Collaborateur[i]||'(sans nom)', grp:c.Groupement[i]}))
                .sort((x,y)=>x.nom.localeCompare(y.nom,'fr'));
-    projets = p.id.map((id,i)=>({id, nom:p.Libelle_Projet[i]||'(sans titre)', porteur:p.Groupement_Porteur[i]}))
+    hasPrjCollab = 'Collaborateur' in p;
+    projets = p.id.map((id,i)=>({id, nom:p.Libelle_Projet[i]||'(sans titre)', porteur:p.Groupement_Porteur[i],
+                                 pcol: hasPrjCollab ? (p.Collaborateur[i]||0) : 0}))
                .sort((x,y)=>x.nom.localeCompare(y.nom,'fr'));
     hasCollab = 'Collaborateur' in a;
     affs = a.id.map((id,i)=>({id, prj:a.Projet[i], grp:a.Groupement[i], col:hasCollab ? (a.Collaborateur[i]||0) : 0,
@@ -230,15 +239,17 @@ function chipsHtml(list){
   return Object.entries(by).map(([g,v]) => {
     const title = `${gName(+g)} — impact ${v.imp}` + (v.noms.length ? ` — ${v.noms.join(', ')}` : '');
     const extra = v.noms.length ? ` · ${v.noms.length}👤` : '';
-    return `<span class="chip ${v.imp}" title="${esc(title)}">${esc(gName(+g))}${extra}</span>`;
+    return `<span class="tag" title="${esc(title)}">${esc(gName(+g))} <b class="${esc(v.imp)}">${esc((v.imp||'?').toLowerCase())}</b>${extra}</span>`;
   }).join('');
 }
 function cardHtml(p, q, list){
   return `<div class="card" tabindex="0" draggable="true" style="--suit:${gColor(p.porteur)}"
             data-prj="${p.id}" data-q="${q===null?'':Q.indexOf(q)}">
-    <div class="t">${esc(p.nom)}</div>
-    <span class="suit">${esc(gName(p.porteur))}</span>
-    ${list ? `<div class="chips">${chipsHtml(list)}</div>` : ''}
+    <div class="banner"><span class="flag">⚑</span><span>${esc(gName(p.porteur))}</span>${p.pcol ? `<span class="who">${esc(cName(p.pcol))}</span>` : ''}</div>
+    <div class="body">
+      <div class="t">${esc(p.nom)}</div>
+      ${list ? `<div class="k">Impact</div><div class="chips">${chipsHtml(list)}</div>` : ''}
+    </div>
   </div>`;
 }
 function viewKanban(){
@@ -246,22 +257,24 @@ function viewKanban(){
   let h = `<div class="toolbar">
     <div class="fg"><label>Groupement porteur</label>
       <select id="fPorteur">${opts(grps, F.porteur, [0,'Tous'])}</select></div>
+    ${hasPrjCollab ? `<div class="fg"><label>Collaborateur porteur</label>
+      <select id="fPcol">${opts(F.porteur ? collabs.filter(c=>c.grp===F.porteur) : collabs, F.pcol, [0,'Tous'])}</select></div>` : ''}
     <div class="fg"><label>Groupement impacté</label>
       <select id="fImpacte">${opts(grps, F.impacte, [0,'Tous'])}</select></div>
-    ${hasCollab ? `<div class="fg"><label>Collaborateur</label>
+    ${hasCollab ? `<div class="fg"><label>Collaborateur impacté</label>
       <select id="fCollab">${opts(collabList, F.collab, [0,'Tous'])}</select></div>` : ''}
     <button id="fReset">Réinitialiser</button>
     <button class="primary" id="newPrj">Nouveau projet</button>
   </div><div class="board">`;
 
   // Colonne "À planifier" : projets sans aucune affectation
-  const todo = projets.filter(p => (!F.porteur || p.porteur===F.porteur) && !affs.some(a=>a.prj===p.id));
+  const todo = projets.filter(p => matchPorteur(p) && !affs.some(a=>a.prj===p.id));
   h += `<div class="col todo" data-drop=""><div class="col-head"><b>À planifier</b><span class="n">${todo.length}</span></div>`;
   h += todo.length ? todo.map(p=>cardHtml(p,null,null)).join('') : `<div class="empty">Tous les projets sont placés.</div>`;
   h += `</div>`;
 
   Q.forEach((q,qi) => {
-    const cards = projets.filter(p => !F.porteur || p.porteur===F.porteur)
+    const cards = projets.filter(matchPorteur)
                          .map(p => [p, visibleAffs(p.id,q)]).filter(([,l])=>l.length);
     h += `<div class="col" data-drop="${qi}"><div class="col-head"><b>${QS[qi]}</b><span class="n">${cards.length} projet(s)</span></div>`;
     const target = F.collab ? ['col',F.collab] : F.impacte ? ['grp',F.impacte] : null;
@@ -280,11 +293,13 @@ function viewKanban(){
   return h;
 }
 function bindKanban(){
-  $('#fPorteur').onchange = e => { F.porteur = +e.target.value; render(); };
+  $('#fPorteur').onchange = e => { F.porteur = +e.target.value;
+    if(F.pcol && F.porteur && (collabs.find(c=>c.id===F.pcol)||{}).grp !== F.porteur) F.pcol = 0; render(); };
+  if($('#fPcol')) $('#fPcol').onchange = e => { F.pcol = +e.target.value; render(); };
   $('#fImpacte').onchange = e => { F.impacte = +e.target.value;
     if(F.collab && (collabs.find(c=>c.id===F.collab)||{}).grp !== F.impacte && F.impacte) F.collab = 0; render(); };
   if($('#fCollab')) $('#fCollab').onchange = e => { F.collab = +e.target.value; render(); };
-  $('#fReset').onclick = () => { F.porteur=F.impacte=F.collab=0; render(); };
+  $('#fReset').onclick = () => { F.porteur=F.pcol=F.impacte=F.collab=0; render(); };
   $('#newPrj').onclick = newProject;
 
   document.querySelectorAll('.card').forEach(c => {
@@ -336,7 +351,9 @@ async function moveProject(prjId, from, to, copy){
 async function newProject(){
   const nom = prompt('Libellé du nouveau projet :');
   if(!nom || !nom.trim()) return;
-  const r = await act([['AddRecord', T.PRJ, null, {Libelle_Projet:nom.trim(), Groupement_Porteur:F.porteur||0}]]);
+  const r = await act([['AddRecord', T.PRJ, null, (()=>{ const f={Libelle_Projet:nom.trim(), Groupement_Porteur:F.porteur||0};
+      if(hasPrjCollab && F.pcol){ f.Collaborateur=F.pcol; f.Groupement_Porteur=(collabs.find(c=>c.id===F.pcol)||{}).grp||f.Groupement_Porteur; }
+      return f; })()]]);
   if(r && r.retValues) openModal(r.retValues[0]);
 }
 
@@ -353,6 +370,7 @@ function renderModal(){
     <div class="row">
       <div class="fg" style="flex:1"><label>Libellé</label><input type="text" id="mNom" value="${esc(p.nom)}"></div>
       <div class="fg"><label>Groupement porteur</label><select id="mPorteur">${opts(grps, p.porteur, [0,'—'])}</select></div>
+      ${hasPrjCollab ? `<div class="fg"><label>Collaborateur porteur</label><select id="mPcol">${opts(collabs.filter(c=>!p.porteur||c.grp===p.porteur), p.pcol, [0,'—'])}</select></div>` : ''}
       <button class="primary" id="mSave">Enregistrer</button>
     </div>
     <h3>Impact par groupement</h3>
@@ -395,8 +413,19 @@ function renderModal(){
 
   $('#bd').onclick = e => { if(e.target.id==='bd') closeModal(); };
   $('#mClose').onclick = closeModal;
-  $('#mSave').onclick = () => act([['UpdateRecord', T.PRJ, p.id,
-      {Libelle_Projet:$('#mNom').value.trim(), Groupement_Porteur:+$('#mPorteur').value}]]);
+  $('#mSave').onclick = () => {
+    const f = {Libelle_Projet:$('#mNom').value.trim(), Groupement_Porteur:+$('#mPorteur').value};
+    if(hasPrjCollab){
+      f.Collaborateur = +$('#mPcol').value;
+      const c = collabs.find(x=>x.id===f.Collaborateur);
+      if(c && f.Groupement_Porteur && c.grp!==f.Groupement_Porteur) f.Collaborateur = 0;
+    }
+    act([['UpdateRecord', T.PRJ, p.id, f]]);
+  };
+  if($('#mPcol')) $('#mPorteur').onchange = e => {
+    const g = +e.target.value;
+    $('#mPcol').innerHTML = opts(collabs.filter(c=>!g||c.grp===g), 0, [0,'—']);
+  };
   $('#mDel').onclick = async () => {
     if(!confirm(`Supprimer « ${p.nom} » et ses ${pa.length} affectation(s) ?`)) return;
     modalPrj = null;
@@ -469,7 +498,7 @@ function sheetGroupement(g){
   else {
     h += `<table class="grid"><tr><th>Projet</th><th>Porteur</th>${QS.map(s=>`<th>${s}</th>`).join('')}</tr>`;
     list.forEach(p => {
-      h += `<tr><td>${esc(p.nom)}</td><td>${esc(gName(p.porteur))}</td>`;
+      h += `<tr><td>${esc(p.nom)}</td><td>${porteurTxt(p)}</td>`;
       Q.forEach(q => h += `<td>${cellList(ga.filter(a=>a.prj===p.id && a.q===q), hasCollab)}</td>`);
       h += `</tr>`;
     });
@@ -478,7 +507,7 @@ function sheetGroupement(g){
   const portes = projets.filter(p=>p.porteur===g.id);
   if(portes.length) h += `<h3>Projets portés (${portes.length})</h3><p style="margin:0">${portes.map(p=>{
       const qs = QS.filter((s,i)=>affs.some(a=>a.prj===p.id && a.q===Q[i]));
-      return `${esc(p.nom)} <span class="nom">(${qs.length?qs.join(', '):'non planifié'})</span>`; }).join(' ; ')}</p>`;
+      return `${esc(p.nom)} <span class="nom">(${p.pcol?esc(cName(p.pcol))+' — ':''}${qs.length?qs.join(', '):'non planifié'})</span>`; }).join(' ; ')}</p>`;
   return h + `<p class="legend">Faible = 1 pt, Fort = 2 pts. La charge du groupement inclut ses affectations nominatives.</p></div>`;
 }
 function sheetCollab(c){
@@ -486,11 +515,13 @@ function sheetCollab(c){
   const via = affs.filter(a=>a.grp===c.grp && !a.col);
   const prjIds = [...new Set([...own,...via].map(a=>a.prj))];
   const list = projets.filter(p=>prjIds.includes(p.id));
+  const portes = projets.filter(p=>p.pcol===c.id);
   let h = `<div class="sheet"><h2>État de ${esc(c.nom)}</h2><div class="meta">Groupement ${esc(gName(c.grp))} — planning 2027 — édité le ${today()}</div>`;
+  if(portes.length) h += `<p style="margin:0 0 10px"><b>Projets portés :</b> ${portes.map(p=>esc(p.nom)).join(' ; ')}</p>`;
   if(!list.length) return h + `<p class="empty">Aucun projet ne concerne cette personne.</p></div>`;
   h += `<table class="grid"><tr><th>Projet</th><th>Porteur</th>${QS.map(s=>`<th>${s}</th>`).join('')}</tr>`;
   list.forEach(p => {
-    h += `<tr><td>${esc(p.nom)}</td><td>${esc(gName(p.porteur))}</td>`;
+    h += `<tr><td>${esc(p.nom)}</td><td>${porteurTxt(p)}</td>`;
     Q.forEach(q => {
       const o = own.filter(a=>a.prj===p.id && a.q===q), v = via.filter(a=>a.prj===p.id && a.q===q);
       h += `<td>${cellList(o,false)}${v.map(a=>`<div class="via"><span class="chip ${esc(a.imp)}">${esc(a.imp||'?')}</span> <span class="nom">via groupement</span></div>`).join('')}</td>`;
@@ -526,7 +557,7 @@ function sheetProjet(p){
   const gIds = [...new Set(pa.map(a=>a.grp))];
   const list = grps.filter(g=>gIds.includes(g.id));
   let h = `<div class="sheet" style="--suit:${gColor(p.porteur)}"><h2>${esc(p.nom)}</h2>
-    <div class="meta">Porteur : <span class="suit">${esc(gName(p.porteur))}</span> — édité le ${today()}</div>`;
+    <div class="meta">Porteur : <span class="suit">${esc(gName(p.porteur))}</span>${p.pcol ? ' ' + esc(cName(p.pcol)) : ''} — édité le ${today()}</div>`;
   if(!list.length) return h + `<p class="empty">Projet non planifié.</p></div>`;
   h += `<table class="grid"><tr><th>Groupement impacté</th>${QS.map(s=>`<th>${s}</th>`).join('')}</tr>`;
   list.forEach(g => {
