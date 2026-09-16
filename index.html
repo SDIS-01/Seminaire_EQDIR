@@ -99,6 +99,23 @@
     .sheet:last-child{page-break-after:auto;}
     *{-webkit-print-color-adjust:exact; print-color-adjust:exact;}
   }
+  .badge{font-size:10px; font-weight:600; padding:1px 6px; border-radius:4px; white-space:nowrap;}
+  .banner .badge{margin-left:auto; background:rgba(255,255,255,.92); color:var(--ink);}
+  .banner .badge + .badge{margin-left:0;}
+  .b-P1{color:#b3261e !important;} .b-P2{color:#a86a00 !important;} .b-P3{color:#1f6fb2 !important;} .b-Poursuite{color:#555 !important;}
+  .badge.dd{background:#1d3557; color:#fff;}
+  .banner .badge.dd{background:#1d3557; color:#fff; border:1px solid rgba(255,255,255,.7);}
+  .gantt{border-collapse:collapse; width:100%; table-layout:fixed; background:#fff;}
+  .gantt th,.gantt td{padding:4px 6px; font-size:12px; vertical-align:middle;}
+  .gantt th{background:#f1efe8; text-align:center; border-bottom:1px solid var(--line);}
+  .gantt th.lft{text-align:left;}
+  .gantt tr.row td{border-bottom:1px solid #eeece5;}
+  .gantt td.q{border-left:1px dashed #e0ddd3; padding:3px 0;}
+  .gantt .bar{height:18px; font-size:10px; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:600;}
+  .gantt .bar.Faible{color:var(--ink); font-weight:400;}
+  .gantt .bar.first{border-radius:4px 0 0 4px; margin-left:4px;} .gantt .bar.last{border-radius:0 4px 4px 0; margin-right:4px;}
+  .gantt .pn{font-weight:600;} .gantt .pm{font-size:10px; color:var(--muted);}
+  .grp-band td{background:var(--suit); color:#fff; font-weight:600; padding:5px 8px;}
   @media (max-width:900px){ .board{grid-template-columns:1fr 1fr;} }
 </style>
 </head>
@@ -109,8 +126,10 @@
   <nav class="tabs">
     <button class="tab" data-v="kanban">Kanban</button>
     <button class="tab" data-v="charge">Charge</button>
-    <button class="tab" data-v="etat">État groupement / personne</button>
+    <button class="tab" data-v="etat">État groupement / collaborateur</button>
     <button class="tab" data-v="projet">État par projet</button>
+    <button class="tab" data-v="prio">État priorité / DDSIS</button>
+    <button class="tab" data-v="p2a">P2A 2027</button>
   </nav>
   <div class="hright">
     <label>Seuil de charge <input id="seuil" type="number" min="1" step="1"></label>
@@ -127,19 +146,26 @@ const T = { GRP:'Groupement', COL:'Collaborateur', PRJ:'Projet', AFF:'Affectatio
 const Q = ['T1 - 2027','T2 - 2027','T3 - 2027','T4 - 2027'];
 const QS = ['T1','T2','T3','T4'];                 // libellés courts
 const POIDS = { Faible:1, Fort:2 };
-const SEUIL_DEFAUT = 6;                            // points par trimestre
+const PRIOS = ['P1','P2','P3','Poursuite'];         // ordre de tri
+const DD_VAL = 'Roadmap DDSIS';
+const SEUIL_DEFAUT = 6;
+const REFRESH_MS = 30000;                          // rafraîchissement automatique (ms)                            // points par trimestre
 const PALETTE = ['#1f6fb2','#c0392b','#2e8b57','#8e44ad','#d35400','#16a085','#7f5539',
                  '#b8336a','#3d5a80','#6a994e','#bc6c25','#5e548e','#0081a7','#9c6644'];
 
 /* ================= État ================= */
-let grps=[], collabs=[], projets=[], affs=[], hasCollab=false, hasPrjCollab=false;
+let grps=[], collabs=[], projets=[], affs=[], hasCollab=false, hasPrjCollab=false, hasPrio=false, hasDD=false;
 let seuil = SEUIL_DEFAUT;
 let view = 'kanban';
-const F = { porteur:0, pcol:0, impacte:0, collab:0 }; // filtres kanban (pcol = collaborateur porteur)
+const F = { porteur:0, pcol:0, impacte:0, collab:0, prio:'', dd:'' }; // filtres kanban (pcol = collaborateur porteur)
 let modalPrj = null;                                // id projet ouvert
 let chargeOpen = new Set();
 const E = { type:'grp', id:'all', prj:'all' };      // sélection des états
 let loadSeq = 0;
+let lastSig = '';                                   // signature des données affichées
+let dragging = false;
+const P = { mode:'porteur', g:'all' };              // options P2A
+const S = { type:'prio', val:'all' };               // état priorité / DDSIS
 
 /* ================= Utilitaires ================= */
 const $ = s => document.querySelector(s);
@@ -148,7 +174,24 @@ const gName = id => (grps.find(g=>g.id===id)||{}).nom || '—';
 const cName = id => (collabs.find(c=>c.id===id)||{}).nom || '—';
 const pObj  = id => projets.find(p=>p.id===id);
 const porteurTxt = p => esc(gName(p.porteur)) + (p.pcol ? ` <span class="nom">(${esc(cName(p.pcol))})</span>` : '');
-const matchPorteur = p => (!F.porteur || p.porteur===F.porteur) && (!F.pcol || p.pcol===F.pcol);
+const matchPD = p => (!F.prio || (F.prio==='__none' ? !p.prio : p.prio===F.prio)) && (!F.dd || (F.dd==='oui') === p.dd);
+const matchPorteur = p => (!F.porteur || p.porteur===F.porteur) && (!F.pcol || p.pcol===F.pcol) && matchPD(p);
+const prioRank = p => { const i = PRIOS.indexOf(p.prio); return i<0 ? 99 : i; };
+const byPrio = (a,b) => prioRank(a)-prioRank(b) || a.nom.localeCompare(b.nom,'fr');
+const prioBadge = p => p.prio ? `<span class="badge b-${esc(p.prio)}">${esc(p.prio)}</span>` : '';
+const ddBadge = p => p.dd ? `<span class="badge dd">Roadmap DDSIS</span>` : '';
+function pdFilters(){
+  return (hasPrio ? `<div class="fg"><label>Priorité</label><select id="fPrio">
+      <option value="">Toutes</option>${PRIOS.map(v=>`<option ${F.prio===v?'selected':''}>${v}</option>`).join('')}
+      <option value="__none" ${F.prio==='__none'?'selected':''}>Sans priorité</option></select></div>` : '')
+   + (hasDD ? `<div class="fg"><label>Roadmap DDSIS</label><select id="fDD">
+      <option value="">Tous</option><option value="oui" ${F.dd==='oui'?'selected':''}>Oui</option>
+      <option value="non" ${F.dd==='non'?'selected':''}>Non</option></select></div>` : '');
+}
+function bindPD(){
+  if($('#fPrio')) $('#fPrio').onchange = e => { F.prio = e.target.value; render(); };
+  if($('#fDD')) $('#fDD').onchange = e => { F.dd = e.target.value; render(); };
+}
 const gColor = id => { const i = grps.findIndex(g=>g.id===id); return i<0 ? '#8a8a8a' : PALETTE[i % PALETTE.length]; };
 const pts = a => POIDS[a.imp] || 0;
 const sum = arr => arr.reduce((s,a)=>s+pts(a),0);
@@ -166,22 +209,27 @@ grist.ready({ requiredAccess:'full' });
 grist.onRecords(() => loadAll());
 grist.onOptions(o => { if(o && o.seuil){ seuil = Number(o.seuil)||SEUIL_DEFAUT; $('#seuil').value = seuil; render(); } });
 
-async function loadAll(){
+async function loadAll(auto){
   const seq = ++loadSeq;
   try{
     const [g,c,p,a] = await Promise.all([T.GRP,T.COL,T.PRJ,T.AFF].map(t=>grist.docApi.fetchTable(t)));
     if(seq !== loadSeq) return;
+    const sig = JSON.stringify([g,c,p,a]);
+    if(auto && sig === lastSig) return;               // rien n'a changé : pas de re-rendu
+    lastSig = sig;
     grps = g.id.map((id,i)=>({id, nom:g.Groupement[i]||'(sans nom)'}));
     collabs = c.id.map((id,i)=>({id, nom:c.Collaborateur[i]||'(sans nom)', grp:c.Groupement[i]}))
                .sort((x,y)=>x.nom.localeCompare(y.nom,'fr'));
-    hasPrjCollab = 'Collaborateur' in p;
+    hasPrjCollab = 'Collaborateur' in p; hasPrio = 'Priorite' in p; hasDD = 'DDSIS' in p;
     projets = p.id.map((id,i)=>({id, nom:p.Libelle_Projet[i]||'(sans titre)', porteur:p.Groupement_Porteur[i],
-                                 pcol: hasPrjCollab ? (p.Collaborateur[i]||0) : 0}))
+                                 pcol: hasPrjCollab ? (p.Collaborateur[i]||0) : 0,
+                                 prio: hasPrio ? (p.Priorite[i]||'') : '',
+                                 dd: hasDD ? p.DDSIS[i]===DD_VAL : false}))
                .sort((x,y)=>x.nom.localeCompare(y.nom,'fr'));
     hasCollab = 'Collaborateur' in a;
     affs = a.id.map((id,i)=>({id, prj:a.Projet[i], grp:a.Groupement[i], col:hasCollab ? (a.Collaborateur[i]||0) : 0,
                               q:a.Trimestre[i], imp:a.Impact[i]}));
-    setStatus(hasCollab ? '' : "Colonne Affectation.Collaborateur absente : la distinction par personne est désactivée.");
+    setStatus(hasCollab ? '' : "Colonne Affectation.Collaborateur absente : la distinction par collaborateur est désactivée.");
     render();
   }catch(err){
     console.error(err);
@@ -216,8 +264,11 @@ function render(){
   if(view==='kanban') app.innerHTML = viewKanban();
   else if(view==='charge') app.innerHTML = viewCharge();
   else if(view==='etat') app.innerHTML = viewEtat();
-  else app.innerHTML = viewEtatProjet();
+  else if(view==='projet') app.innerHTML = viewEtatProjet();
+  else if(view==='prio') app.innerHTML = viewEtatPrio();
+  else app.innerHTML = viewP2A();
   if(view==='kanban') bindKanban();
+  bindPD();
   renderModal();
 }
 
@@ -229,7 +280,7 @@ function visibleAffs(prjId, q){
   return l;
 }
 function chipsHtml(list){
-  // Regroupe par groupement : impact le plus fort + noms des personnes
+  // Regroupe par groupement : impact le plus fort + noms des collaborateurs
   const by = {};
   list.forEach(a => {
     const k = a.grp; by[k] = by[k] || {imp:'Faible', noms:[], grpLevel:false};
@@ -245,7 +296,7 @@ function chipsHtml(list){
 function cardHtml(p, q, list){
   return `<div class="card" tabindex="0" draggable="true" style="--suit:${gColor(p.porteur)}"
             data-prj="${p.id}" data-q="${q===null?'':Q.indexOf(q)}">
-    <div class="banner"><span class="flag">⚑</span><span>${esc(gName(p.porteur))}</span>${p.pcol ? `<span class="who">${esc(cName(p.pcol))}</span>` : ''}</div>
+    <div class="banner"><span class="flag">⚑</span><span>${esc(gName(p.porteur))}</span>${p.pcol ? `<span class="who">${esc(cName(p.pcol))}</span>` : ''}${prioBadge(p)}${ddBadge(p)}</div>
     <div class="body">
       <div class="t">${esc(p.nom)}</div>
       ${list ? `<div class="k">Impact</div><div class="chips">${chipsHtml(list)}</div>` : ''}
@@ -263,18 +314,18 @@ function viewKanban(){
       <select id="fImpacte">${opts(grps, F.impacte, [0,'Tous'])}</select></div>
     ${hasCollab ? `<div class="fg"><label>Collaborateur impacté</label>
       <select id="fCollab">${opts(collabList, F.collab, [0,'Tous'])}</select></div>` : ''}
+    ${pdFilters()}
     <button id="fReset">Réinitialiser</button>
-    <button class="primary" id="newPrj">Nouveau projet</button>
   </div><div class="board">`;
 
   // Colonne "À planifier" : projets sans aucune affectation
-  const todo = projets.filter(p => matchPorteur(p) && !affs.some(a=>a.prj===p.id));
+  const todo = projets.filter(p => matchPorteur(p) && !affs.some(a=>a.prj===p.id)).sort(byPrio);
   h += `<div class="col todo" data-drop=""><div class="col-head"><b>À planifier</b><span class="n">${todo.length}</span></div>`;
   h += todo.length ? todo.map(p=>cardHtml(p,null,null)).join('') : `<div class="empty">Tous les projets sont placés.</div>`;
   h += `</div>`;
 
   Q.forEach((q,qi) => {
-    const cards = projets.filter(matchPorteur)
+    const cards = projets.filter(matchPorteur).sort(byPrio)
                          .map(p => [p, visibleAffs(p.id,q)]).filter(([,l])=>l.length);
     h += `<div class="col" data-drop="${qi}"><div class="col-head"><b>${QS[qi]}</b><span class="n">${cards.length} projet(s)</span></div>`;
     const target = F.collab ? ['col',F.collab] : F.impacte ? ['grp',F.impacte] : null;
@@ -299,11 +350,11 @@ function bindKanban(){
   $('#fImpacte').onchange = e => { F.impacte = +e.target.value;
     if(F.collab && (collabs.find(c=>c.id===F.collab)||{}).grp !== F.impacte && F.impacte) F.collab = 0; render(); };
   if($('#fCollab')) $('#fCollab').onchange = e => { F.collab = +e.target.value; render(); };
-  $('#fReset').onclick = () => { F.porteur=F.pcol=F.impacte=F.collab=0; render(); };
-  $('#newPrj').onclick = newProject;
+  $('#fReset').onclick = () => { F.porteur=F.pcol=F.impacte=F.collab=0; F.prio=F.dd=''; render(); };
 
   document.querySelectorAll('.card').forEach(c => {
-    c.ondragstart = e => e.dataTransfer.setData('text/plain', JSON.stringify({prj:+c.dataset.prj, q:c.dataset.q}));
+    c.ondragend = () => { dragging = false; };
+    c.ondragstart = e => (dragging = true) && e.dataTransfer.setData('text/plain', JSON.stringify({prj:+c.dataset.prj, q:c.dataset.q}));
     c.onclick = () => openModal(+c.dataset.prj);
     c.onkeydown = e => { if(e.key==='Enter') openModal(+c.dataset.prj); };
   });
@@ -348,15 +399,6 @@ async function moveProject(prjId, from, to, copy){
   });
   await act(actions);
 }
-async function newProject(){
-  const nom = prompt('Libellé du nouveau projet :');
-  if(!nom || !nom.trim()) return;
-  const r = await act([['AddRecord', T.PRJ, null, (()=>{ const f={Libelle_Projet:nom.trim(), Groupement_Porteur:F.porteur||0};
-      if(hasPrjCollab && F.pcol){ f.Collaborateur=F.pcol; f.Groupement_Porteur=(collabs.find(c=>c.id===F.pcol)||{}).grp||f.Groupement_Porteur; }
-      return f; })()]]);
-  if(r && r.retValues) openModal(r.retValues[0]);
-}
-
 /* ================= Fiche projet (modale) ================= */
 function openModal(id){ modalPrj = id; renderModal(); }
 function closeModal(){ modalPrj = null; renderModal(); }
@@ -371,6 +413,8 @@ function renderModal(){
       <div class="fg" style="flex:1"><label>Libellé</label><input type="text" id="mNom" value="${esc(p.nom)}"></div>
       <div class="fg"><label>Groupement porteur</label><select id="mPorteur">${opts(grps, p.porteur, [0,'—'])}</select></div>
       ${hasPrjCollab ? `<div class="fg"><label>Collaborateur porteur</label><select id="mPcol">${opts(collabs.filter(c=>!p.porteur||c.grp===p.porteur), p.pcol, [0,'—'])}</select></div>` : ''}
+      ${hasPrio ? `<div class="fg"><label>Priorité</label><select id="mPrio"><option value="">—</option>${PRIOS.map(v=>`<option ${p.prio===v?'selected':''}>${v}</option>`).join('')}</select></div>` : ''}
+      ${hasDD ? `<div class="fg"><label>Roadmap DDSIS</label><label style="font-size:13px;color:var(--ink);padding:6px 0"><input type="checkbox" id="mDD" ${p.dd?'checked':''}> Oui</label></div>` : ''}
       <button class="primary" id="mSave">Enregistrer</button>
     </div>
     <h3>Impact par groupement</h3>
@@ -398,7 +442,7 @@ function renderModal(){
       nom.map(a=>`<tr><td>${esc(cName(a.col))}</td><td>${esc(gName(a.grp))}</td><td>${esc(a.q)}</td>
         <td><button data-cyc="${a.id}">${esc(a.imp||'?')}</button></td>
         <td><button class="danger" data-del="${a.id}">Retirer</button></td></tr>`).join('') + `</table>`
-      : `<p class="hint" style="margin:0">Aucune personne désignée nominativement.</p>`;
+      : `<p class="hint" style="margin:0">Aucun collaborateur désigné nominativement.</p>`;
     h += `<div class="row" style="margin-top:8px">
       <div class="fg"><label>Collaborateur</label><select id="nCol">${collabs.map(c=>`<option value="${c.id}">${esc(c.nom)} (${esc(gName(c.grp))})</option>`).join('')}</select></div>
       <div class="fg"><label>Trimestre</label><select id="nQ">${Q.map(q=>`<option>${q}</option>`).join('')}</select></div>
@@ -406,7 +450,7 @@ function renderModal(){
       <button id="nAdd">Ajouter</button></div>`;
   }
   h += `<div class="row" style="justify-content:space-between; margin:16px 0 0">
-      <button class="danger" id="mDel">Supprimer le projet</button>
+      <span></span>
       <button id="mClose">Fermer</button></div>
   </div></div>`;
   m.innerHTML = h;
@@ -420,16 +464,13 @@ function renderModal(){
       const c = collabs.find(x=>x.id===f.Collaborateur);
       if(c && f.Groupement_Porteur && c.grp!==f.Groupement_Porteur) f.Collaborateur = 0;
     }
+    if(hasPrio) f.Priorite = $('#mPrio').value || '';
+    if(hasDD) f.DDSIS = $('#mDD').checked ? DD_VAL : '';
     act([['UpdateRecord', T.PRJ, p.id, f]]);
   };
   if($('#mPcol')) $('#mPorteur').onchange = e => {
     const g = +e.target.value;
     $('#mPcol').innerHTML = opts(collabs.filter(c=>!g||c.grp===g), 0, [0,'—']);
-  };
-  $('#mDel').onclick = async () => {
-    if(!confirm(`Supprimer « ${p.nom} » et ses ${pa.length} affectation(s) ?`)) return;
-    modalPrj = null;
-    await act([...pa.map(a=>['RemoveRecord', T.AFF, a.id]), ['RemoveRecord', T.PRJ, p.id]]);
   };
   m.querySelectorAll('.cell').forEach(td => {
     const cyc = () => {
@@ -449,7 +490,7 @@ function renderModal(){
   if($('#nAdd')) $('#nAdd').onclick = () => {
     const col = +$('#nCol').value, q = $('#nQ').value, imp = $('#nImp').value;
     const c = collabs.find(x=>x.id===col); if(!c) return;
-    if(pa.some(a=>a.col===col && a.q===q)){ alert('Cette personne est déjà affectée sur ce trimestre.'); return; }
+    if(pa.some(a=>a.col===col && a.q===q)){ alert('Ce collaborateur est déjà affecté sur ce trimestre.'); return; }
     act([addAff(p.id, c.grp, col, q, imp)]);
   };
 }
@@ -459,7 +500,7 @@ document.addEventListener('keydown', e => { if(e.key==='Escape' && modalPrj) clo
 function viewCharge(){
   let h = `<div class="toolbar no-print"><button id="cPrint" onclick="window.print()">Imprimer</button>
     <span class="hint" style="margin:0">Points par trimestre (faible = 1, fort = 2), seuil ${seuil}.
-    Vert &lt; 70 %, orange jusqu'au seuil, rouge au-delà.${hasCollab?' Clic sur un groupement : détail par personne (affectations nominatives).':''}</span></div>
+    Vert &lt; 70 %, orange jusqu'au seuil, rouge au-delà.${hasCollab?' Clic sur un groupement : détail par collaborateur (affectations nominatives).':''}</span></div>
     <div class="sheet"><h2>Charge des groupements — 2027</h2><div class="meta">Édité le ${today()} — seuil ${seuil} pts</div>
     <table class="grid"><tr><th>Groupement</th>${QS.map(s=>`<th class="c">${s}</th>`).join('')}<th class="c">Projets</th></tr>`;
   grps.forEach(g => {
@@ -482,7 +523,7 @@ function viewCharge(){
   return h;
 }
 
-/* ================= États groupement / personne ================= */
+/* ================= États groupement / collaborateur ================= */
 function cellList(list, showNames){
   return list.map(a => {
     const who = a.col ? (showNames ? ` <span class="nom">${esc(cName(a.col))}</span>` : '') : (showNames ? ' <span class="nom">groupement</span>' : '');
@@ -492,19 +533,19 @@ function cellList(list, showNames){
 function sheetGroupement(g){
   const ga = affs.filter(a=>a.grp===g.id);
   const prjIds = [...new Set(ga.map(a=>a.prj))];
-  const list = projets.filter(p=>prjIds.includes(p.id));
+  const list = projets.filter(p=>prjIds.includes(p.id) && matchPD(p)).sort(byPrio);
   let h = `<div class="sheet"><h2>État du groupement ${esc(g.nom)}</h2><div class="meta">Planning 2027 — édité le ${today()}</div>`;
   if(!list.length) h += `<p class="empty">Aucun projet n'impacte ce groupement.</p>`;
   else {
     h += `<table class="grid"><tr><th>Projet</th><th>Porteur</th>${QS.map(s=>`<th>${s}</th>`).join('')}</tr>`;
     list.forEach(p => {
-      h += `<tr><td>${esc(p.nom)}</td><td>${porteurTxt(p)}</td>`;
+      h += `<tr><td>${esc(p.nom)} ${prioBadge(p)} ${ddBadge(p)}</td><td>${porteurTxt(p)}</td>`;
       Q.forEach(q => h += `<td>${cellList(ga.filter(a=>a.prj===p.id && a.q===q), hasCollab)}</td>`);
       h += `</tr>`;
     });
     h += `<tr><th colspan="2">Charge (seuil ${seuil})</th>${Q.map(q=>{const v=chargeGrp(g.id,q);return `<td class="heat ${lvl(v)}">${v} pts</td>`;}).join('')}</tr></table>`;
   }
-  const portes = projets.filter(p=>p.porteur===g.id);
+  const portes = projets.filter(p=>p.porteur===g.id && matchPD(p)).sort(byPrio);
   if(portes.length) h += `<h3>Projets portés (${portes.length})</h3><p style="margin:0">${portes.map(p=>{
       const qs = QS.filter((s,i)=>affs.some(a=>a.prj===p.id && a.q===Q[i]));
       return `${esc(p.nom)} <span class="nom">(${p.pcol?esc(cName(p.pcol))+' — ':''}${qs.length?qs.join(', '):'non planifié'})</span>`; }).join(' ; ')}</p>`;
@@ -514,22 +555,22 @@ function sheetCollab(c){
   const own = affs.filter(a=>a.col===c.id);
   const via = affs.filter(a=>a.grp===c.grp && !a.col);
   const prjIds = [...new Set([...own,...via].map(a=>a.prj))];
-  const list = projets.filter(p=>prjIds.includes(p.id));
-  const portes = projets.filter(p=>p.pcol===c.id);
+  const list = projets.filter(p=>prjIds.includes(p.id) && matchPD(p)).sort(byPrio);
+  const portes = projets.filter(p=>p.pcol===c.id && matchPD(p)).sort(byPrio);
   let h = `<div class="sheet"><h2>État de ${esc(c.nom)}</h2><div class="meta">Groupement ${esc(gName(c.grp))} — planning 2027 — édité le ${today()}</div>`;
   if(portes.length) h += `<p style="margin:0 0 10px"><b>Projets portés :</b> ${portes.map(p=>esc(p.nom)).join(' ; ')}</p>`;
-  if(!list.length) return h + `<p class="empty">Aucun projet ne concerne cette personne.</p></div>`;
+  if(!list.length) return h + `<p class="empty">Aucun projet ne concerne ce collaborateur.</p></div>`;
   h += `<table class="grid"><tr><th>Projet</th><th>Porteur</th>${QS.map(s=>`<th>${s}</th>`).join('')}</tr>`;
   list.forEach(p => {
-    h += `<tr><td>${esc(p.nom)}</td><td>${porteurTxt(p)}</td>`;
+    h += `<tr><td>${esc(p.nom)} ${prioBadge(p)} ${ddBadge(p)}</td><td>${porteurTxt(p)}</td>`;
     Q.forEach(q => {
       const o = own.filter(a=>a.prj===p.id && a.q===q), v = via.filter(a=>a.prj===p.id && a.q===q);
       h += `<td>${cellList(o,false)}${v.map(a=>`<div class="via"><span class="chip ${esc(a.imp)}">${esc(a.imp||'?')}</span> <span class="nom">via groupement</span></div>`).join('')}</td>`;
     });
     h += `</tr>`;
   });
-  h += `<tr><th colspan="2">Charge personnelle (seuil ${seuil})</th>${Q.map(q=>{const v=chargeCol(c.id,q);return `<td class="heat ${lvl(v)}">${v} pts</td>`;}).join('')}</tr></table>`;
-  return h + `<p class="legend">La charge personnelle ne compte que les affectations nominatives. Les lignes « via groupement » concernent tout le groupement.</p></div>`;
+  h += `<tr><th colspan="2">Charge du collaborateur (seuil ${seuil})</th>${Q.map(q=>{const v=chargeCol(c.id,q);return `<td class="heat ${lvl(v)}">${v} pts</td>`;}).join('')}</tr></table>`;
+  return h + `<p class="legend">La charge du collaborateur ne compte que les affectations nominatives. Les lignes « via groupement » concernent tout le groupement.</p></div>`;
 }
 function viewEtat(){
   const canCol = hasCollab;
@@ -538,9 +579,10 @@ function viewEtat(){
   let h = `<div class="toolbar no-print">
     <div class="fg"><label>Type d'état</label><select id="eType">
       <option value="grp" ${E.type==='grp'?'selected':''}>Par groupement</option>
-      ${canCol?`<option value="col" ${E.type==='col'?'selected':''}>Par personne</option>`:''}</select></div>
+      ${canCol?`<option value="col" ${E.type==='col'?'selected':''}>Par collaborateur</option>`:''}</select></div>
     <div class="fg"><label>${E.type==='grp'?'Groupement':'Collaborateur'}</label>
       <select id="eId">${opts(list, E.id, ['all','Tous (une page chacun)'])}</select></div>
+    ${pdFilters()}
     <button class="primary" onclick="window.print()">Imprimer / PDF</button></div>`;
   const sel = E.id==='all' ? list : list.filter(x=>x.id==E.id);
   h += sel.map(x => E.type==='grp' ? sheetGroupement(x) : sheetCollab(x)).join('');
@@ -556,7 +598,7 @@ function sheetProjet(p){
   const pa = affs.filter(a=>a.prj===p.id);
   const gIds = [...new Set(pa.map(a=>a.grp))];
   const list = grps.filter(g=>gIds.includes(g.id));
-  let h = `<div class="sheet" style="--suit:${gColor(p.porteur)}"><h2>${esc(p.nom)}</h2>
+  let h = `<div class="sheet" style="--suit:${gColor(p.porteur)}"><h2>${esc(p.nom)} ${prioBadge(p)} ${ddBadge(p)}</h2>
     <div class="meta">Porteur : <span class="suit">${esc(gName(p.porteur))}</span>${p.pcol ? ' ' + esc(cName(p.pcol)) : ''} — édité le ${today()}</div>`;
   if(!list.length) return h + `<p class="empty">Projet non planifié.</p></div>`;
   h += `<table class="grid"><tr><th>Groupement impacté</th>${QS.map(s=>`<th>${s}</th>`).join('')}</tr>`;
@@ -570,13 +612,124 @@ function sheetProjet(p){
 }
 function viewEtatProjet(){
   let h = `<div class="toolbar no-print">
-    <div class="fg"><label>Projet</label><select id="pSel">${opts(projets, E.prj, ['all','Tous (une page chacun)'])}</select></div>
+    <div class="fg"><label>Projet</label><select id="pSel">${opts(projets.filter(matchPD), E.prj, ['all','Tous (une page chacun)'])}</select></div>
+    ${pdFilters()}
     <button class="primary" onclick="window.print()">Imprimer / PDF</button></div>`;
-  const sel = E.prj==='all' ? projets : projets.filter(p=>p.id==E.prj);
-  h += sel.length ? sel.map(sheetProjet).join('') : `<p class="empty">Aucun projet. Créez-en un depuis le Kanban.</p>`;
+  const sel = E.prj==='all' ? projets.filter(matchPD).sort(byPrio) : projets.filter(p=>p.id==E.prj);
+  h += sel.length ? sel.map(sheetProjet).join('') : `<p class="empty">Aucun projet. Les projets se créent dans la table Projet de Grist.</p>`;
   setTimeout(() => $('#pSel').onchange = e => { E.prj = e.target.value==='all' ? 'all' : +e.target.value; render(); });
   return h;
 }
+
+/* ================= État priorité / DDSIS ================= */
+function sheetListe(titre, meta, list){
+  let h = `<div class="sheet"><h2>${esc(titre)}</h2><div class="meta">${meta} — ${list.length} projet(s) — édité le ${today()}</div>`;
+  if(!list.length) return h + `<p class="empty">Aucun projet.</p></div>`;
+  const ids = new Set(list.map(p=>p.id));
+  const la = affs.filter(a=>ids.has(a.prj));
+  h += `<table class="grid"><tr><th>Projet</th><th>Porteur</th>${QS.map(s=>`<th>${s}</th>`).join('')}</tr>`;
+  list.forEach(p => {
+    h += `<tr><td>${esc(p.nom)} ${prioBadge(p)} ${ddBadge(p)}</td><td>${porteurTxt(p)}</td>`;
+    Q.forEach(q => {
+      const by = {};
+      la.filter(a=>a.prj===p.id && a.q===q).forEach(a => { if(!by[a.grp] || a.imp==='Fort') by[a.grp] = a.imp; });
+      h += `<td>${Object.entries(by).map(([g,imp])=>`<div class="tag" style="display:inline-block;margin:1px">${esc(gName(+g))} <b class="${esc(imp)}">${esc((imp||'?').toLowerCase())}</b></div>`).join('')}</td>`;
+    });
+    h += `</tr>`;
+  });
+  h += `<tr><th colspan="2">Total des points</th>${Q.map(q=>`<td class="c"><b>${sum(la.filter(a=>a.q===q))}</b></td>`).join('')}</tr></table>`;
+  return h + `<p class="legend">Faible = 1 pt, Fort = 2 pts. Total cumulé de tous les groupements impactés.</p></div>`;
+}
+function viewEtatPrio(){
+  if(!hasPrio && !hasDD) return `<p class="empty">Ajoutez les colonnes Priorite et/ou DDSIS dans la table Projet pour utiliser cet état.</p>`;
+  if(S.type==='prio' && !hasPrio) S.type = 'dd';
+  if(S.type==='dd' && !hasDD) S.type = 'prio';
+  let h = `<div class="toolbar no-print">
+    <div class="fg"><label>Type d'état</label><select id="sType">
+      ${hasPrio?`<option value="prio" ${S.type==='prio'?'selected':''}>Par priorité</option>`:''}
+      ${hasDD?`<option value="dd" ${S.type==='dd'?'selected':''}>Roadmap DDSIS</option>`:''}</select></div>
+    ${S.type==='prio' ? `<div class="fg"><label>Priorité</label><select id="sVal">
+      <option value="all">Toutes (une page chacune)</option>
+      ${[...PRIOS,'__none'].map(v=>`<option value="${v}" ${S.val===v?'selected':''}>${v==='__none'?'Sans priorité':v}</option>`).join('')}</select></div>` : ''}
+    <button class="primary" onclick="window.print()">Imprimer / PDF</button></div>`;
+  if(S.type==='prio'){
+    const vals = S.val==='all' ? [...PRIOS,'__none'] : [S.val];
+    vals.forEach(v => {
+      const list = projets.filter(p => v==='__none' ? !p.prio : p.prio===v).sort(byPrio);
+      if(S.val==='all' && v==='__none' && !list.length) return;
+      h += sheetListe(v==='__none' ? 'Projets sans priorité' : `Projets de priorité ${v}`, 'Planning 2027', list);
+    });
+  } else {
+    h += sheetListe('Projets de la Roadmap DDSIS', 'Planning 2027', projets.filter(p=>p.dd).sort(byPrio));
+  }
+  setTimeout(() => {
+    $('#sType').onchange = e => { S.type = e.target.value; S.val = 'all'; render(); };
+    if($('#sVal')) $('#sVal').onchange = e => { S.val = e.target.value; render(); };
+  });
+  return h;
+}
+
+/* ================= P2A 2027 (planning) ================= */
+function ganttCells(list, color){
+  // list : affectations d'un projet (déjà restreintes) ; barre continue sur les trimestres occupés
+  const imp = Q.map(q => { const l = list.filter(a=>a.q===q); return !l.length ? '' : l.some(a=>a.imp==='Fort') ? 'Fort' : 'Faible'; });
+  return imp.map((v,i) => {
+    if(!v) return `<td class="q"></td>`;
+    const cls = [v, !imp[i-1]?'first':'', !imp[i+1]?'last':''].join(' ');
+    const bg = v==='Fort' ? color : color + '55';
+    return `<td class="q"><div class="bar ${cls}" style="background:${bg}">${v.toLowerCase()}</div></td>`;
+  }).join('');
+}
+function sheetP2A(g){
+  const color = gColor(g.id);
+  const list = (P.mode==='porteur'
+      ? projets.filter(p=>p.porteur===g.id)
+      : projets.filter(p=>affs.some(a=>a.prj===p.id && a.grp===g.id))).filter(matchPD).sort(byPrio);
+  if(P.g==='all' && !list.length) return '';
+  let h = `<div class="sheet"><h2>P2A 2027 — ${esc(g.nom)}</h2>
+    <div class="meta">${P.mode==='porteur' ? 'Projets portés par le groupement' : 'Projets impactant le groupement'} — ${list.length} projet(s) — édité le ${today()}</div>
+    <table class="gantt"><colgroup><col style="width:38%">${QS.map(()=>'<col>').join('')}</colgroup>
+    <tr class="grp-band" style="--suit:${color}"><td colspan="5">${esc(g.nom)}</td></tr>
+    <tr><th class="lft">Projet</th>${QS.map(s=>`<th>${s}</th>`).join('')}</tr>`;
+  if(!list.length) h += `<tr><td colspan="5" class="empty">Aucun projet.</td></tr>`;
+  list.forEach(p => {
+    const pa = affs.filter(a=>a.prj===p.id && (P.mode==='porteur' || a.grp===g.id));
+    const meta = P.mode==='porteur'
+      ? (p.pcol ? esc(cName(p.pcol)) : '') + (pa.length ? '' : (p.pcol?' — ':'') + 'non planifié')
+      : 'Porteur : ' + porteurTxt(p);
+    h += `<tr class="row"><td><div class="pn">${esc(p.nom)} ${prioBadge(p)} ${ddBadge(p)}</div><div class="pm">${meta}</div></td>
+      ${ganttCells(pa, P.mode==='porteur' ? color : gColor(p.porteur))}</tr>`;
+  });
+  h += `</table><p class="legend">Barre pleine : impact fort ; barre claire : impact faible.
+    ${P.mode==='porteur' ? "Intensité maximale tous groupements impactés confondus." : "Intensité propre au groupement ; couleur de la barre = groupement porteur."}</p></div>`;
+  return h;
+}
+function viewP2A(){
+  let h = `<div class="toolbar no-print">
+    <div class="fg"><label>Regroupement</label><select id="aMode">
+      <option value="porteur" ${P.mode==='porteur'?'selected':''}>Par groupement porteur</option>
+      <option value="impacte" ${P.mode==='impacte'?'selected':''}>Par groupement impacté</option></select></div>
+    <div class="fg"><label>Groupement</label><select id="aG">${opts(grps, P.g, ['all','Tous (un par page)'])}</select></div>
+    ${pdFilters()}
+    <button class="primary" onclick="window.print()">Imprimer / PDF</button></div>`;
+  const sel = P.g==='all' ? grps : grps.filter(g=>g.id==P.g);
+  const body = sel.map(sheetP2A).join('');
+  h += body || `<p class="empty">Aucun projet ne correspond aux filtres.</p>`;
+  setTimeout(() => {
+    $('#aMode').onchange = e => { P.mode = e.target.value; render(); };
+    $('#aG').onchange = e => { P.g = e.target.value==='all' ? 'all' : +e.target.value; render(); };
+  });
+  return h;
+}
+
+/* ================= Rafraîchissement automatique ================= */
+// Ignoré si : onglet masqué, glisser en cours, fiche projet ouverte, ou liste/saisie en cours d'utilisation
+setInterval(() => {
+  if(document.hidden || dragging || modalPrj) return;
+  const el = document.activeElement;
+  if(el && /^(SELECT|INPUT|TEXTAREA)$/.test(el.tagName)) return;
+  loadAll(true);
+}, REFRESH_MS);
 
 loadAll();
 </script>
