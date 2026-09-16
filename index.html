@@ -146,6 +146,23 @@
   .jr .ja{font-size:11px; color:var(--muted); margin-bottom:2px;} .jr .ja b{color:var(--ink);}
   .jr .jt{white-space:pre-wrap;}
   .com-edit textarea{width:100%; min-height:70px; font:inherit; padding:6px; border-radius:6px; border:1px solid #bdb9ad;}
+  #lock.on{background:var(--red); color:#fff; border-color:var(--red);}
+  .admin{border-color:var(--red); color:var(--red);}
+  .pwdbox{background:#fff; border-radius:10px; width:min(380px,100%); padding:16px 18px; box-shadow:0 10px 30px rgba(0,0,0,.25);}
+  .pwdbox input{width:100%; font:inherit; padding:7px 9px; border-radius:6px; border:1px solid #d3cdc3; margin:4px 0 8px;}
+  .pwdbox .err{color:var(--red); font-size:12px; min-height:16px; margin:0 0 6px;}
+  .kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:8px; margin-bottom:12px;}
+  .kpi{background:var(--soft); border-radius:8px; padding:8px 10px;}
+  .kpi p{margin:0; font-size:11px; color:var(--muted);} .kpi b{font-size:22px;}
+  .brow{display:grid; grid-template-columns:90px 1fr 50px; gap:8px; align-items:center; font-size:12px; margin-bottom:5px;}
+  .sbar{height:12px; border-radius:3px; display:flex; overflow:hidden; background:var(--soft);}
+  .sbar i{display:block; height:100%;}
+  .bk{font-size:10px; font-weight:600; padding:2px 7px; border-radius:4px; white-space:nowrap; display:inline-block;}
+  .bk-ok{background:#dff1e6; color:#2e7d4f;} .bk-lt{background:#fbeccb; color:#8a5a00;}
+  .bk-ko{background:var(--red-bg); color:var(--red);} .bk-ad{background:#e3ecf7; color:#2f5d8a;}
+  .bk-rt{background:var(--soft); color:#57534e;} .bk-ab{background:#efe6fb; color:#6b3fa0;}
+  .bk-av{background:#fff; color:var(--muted); border:1px solid var(--line);}
+  .rp{font-size:10px; color:var(--warn); display:block;}
   @media (max-width:900px){ .board{grid-template-columns:1fr 1fr;} }
 </style>
 </head>
@@ -160,14 +177,17 @@
     <button class="tab" data-v="projet">État par projet</button>
     <button class="tab" data-v="prio">État priorité / DDSIS</button>
     <button class="tab" data-v="p2a">P2A 2027</button>
+    <button class="tab" data-v="bilan">Bilan 2027</button>
   </nav>
   <div class="hright">
+    <button id="lock" title="Mode administration (mot de passe)">🔒 Administration</button>
     <button id="refresh" title="Recharger les données">Actualiser</button>
   </div>
 </header>
 <div id="status" class="status">Connexion à Grist…</div>
 <main id="app"></main>
 <div id="modal"></div>
+<div id="pwd"></div>
 
 <script>
 /* ================= Configuration ================= */
@@ -271,7 +291,11 @@ async function loadAll(auto){
     let jc = null;
     try{ jc = await grist.docApi.fetchTable(T_COM); }catch(e){ jc = null; }   // table journal facultative
     if(seq !== loadSeq) return;
-    const sig = JSON.stringify([g,c,p,a,jc]);
+    let ta = null, tt = null;                           // tables Actions / Taches facultatives
+    try{ ta = await grist.docApi.fetchTable(T_ACT); }catch(e){ ta = null; }
+    try{ tt = await grist.docApi.fetchTable(T_TAC); }catch(e){ tt = null; }
+    if(seq !== loadSeq) return;
+    const sig = JSON.stringify([g,c,p,a,jc,ta,tt]);
     if(auto && sig === lastSig) return;               // rien n'a changé : pas de re-rendu
     lastSig = sig;
     grps = g.id.map((id,i)=>({id, nom:g.Groupement[i]||'(sans nom)'}));
@@ -296,6 +320,7 @@ async function loadAll(auto){
       x.com = [x.old ? x.old : '', ...x.jr.map(e => `${e.auteur||'?'} (${fmtDate(e.date)}) : ${e.txt}`)].filter(Boolean).join('\n');
     });
     hasCom = hasCom || hasJournal;
+    loadActionsTaches(ta, tt);
     setStatus(hasCollab ? '' : "Colonne Affectation.Collaborateur absente : la distinction par collaborateur est désactivée.");
     render();
   }catch(err){
@@ -327,7 +352,8 @@ function render(){
   else if(view==='etat') app.innerHTML = viewEtat();
   else if(view==='projet') app.innerHTML = viewEtatProjet();
   else if(view==='prio') app.innerHTML = viewEtatPrio();
-  else app.innerHTML = viewP2A();
+  else if(view==='p2a') app.innerHTML = viewP2A();
+  else app.innerHTML = viewBilan();
   if(view==='kanban') bindKanban();
   bindPD();
   renderModal();
@@ -837,12 +863,14 @@ function viewP2A(){
       <option value="impacte" ${P.mode==='impacte'?'selected':''}>Par groupement impacté</option></select></div>
     <div class="fg"><label>Groupement</label><select id="aG">${opts(grps, P.g, ['all','Tous (un par page)'])}</select></div>
     ${pdFilters()}
-    <button class="primary" onclick="window.print()">Imprimer / PDF</button></div>`;
+    <button class="primary" onclick="window.print()">Imprimer / PDF</button>
+    <button class="admin" id="aSync" title="Réservé à l'administration">🔒 Générer / mettre à jour les actions</button></div>`;
   const sel = P.g==='all' ? grps : grps.filter(g=>g.id==P.g);
   const body = sel.map(sheetP2A).join('');
   h += body || `<p class="empty">Aucun projet ne correspond aux filtres.</p>`;
   setTimeout(() => {
     $('#aMode').onchange = e => { P.mode = e.target.value; render(); };
+    $('#aSync').onclick = runSync;
     document.querySelectorAll('.gcb').forEach(b => {
       const tg = e => { e.preventDefault(); const k = b.dataset.key; P.open.has(k) ? P.open.delete(k) : P.open.add(k); render(); };
       b.onclick = tg; b.onkeydown = e => { if(e.key==='Enter'||e.key===' ') tg(e); };
@@ -852,10 +880,328 @@ function viewP2A(){
   return h;
 }
 
+/* ================= Administration (mot de passe) ================= */
+// Le mot de passe est stocké haché (SHA-256) dans les options du widget.
+// Barrière d'usage dans le widget : la protection réelle des tables relève des règles d'accès Grist.
+let adminHash = '', unlocked = false, pwdOpen = false;
+grist.onOptions(o => { adminHash = (o && o.adminHash) || ''; });
+async function sha(txt){
+  if(window.crypto && crypto.subtle){
+    const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(txt));
+    return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('');
+  }
+  return sha256js(txt);                                // secours si crypto.subtle indisponible
+}
+function sha256js(str){
+  const K = [], H = [];
+  const isP = n => { for(let d=2; d*d<=n; d++) if(n%d===0) return false; return true; };
+  for(let n=2, c=0; c<64; n++) if(isP(n)){ if(c<8) H[c] = (Math.pow(n,1/2)*2**32)|0; K[c++] = (Math.pow(n,1/3)*2**32)|0; }
+  const bytes = [...new TextEncoder().encode(str)], bl = bytes.length*8;
+  bytes.push(0x80); while(bytes.length%64 !== 56) bytes.push(0);
+  for(let i=7; i>=0; i--) bytes.push(i>3 ? 0 : (bl >>> (i*8)) & 255);
+  const rotr = (x,n) => (x>>>n) | (x<<(32-n));
+  for(let o=0; o<bytes.length; o+=64){
+    const w = [];
+    for(let i=0; i<16; i++) w[i] = (bytes[o+i*4]<<24)|(bytes[o+i*4+1]<<16)|(bytes[o+i*4+2]<<8)|bytes[o+i*4+3];
+    for(let i=16; i<64; i++){
+      const s0 = rotr(w[i-15],7)^rotr(w[i-15],18)^(w[i-15]>>>3), s1 = rotr(w[i-2],17)^rotr(w[i-2],19)^(w[i-2]>>>10);
+      w[i] = (w[i-16]+s0+w[i-7]+s1)|0;
+    }
+    let [a,b,c,d,e,f,g,h] = H;
+    for(let i=0; i<64; i++){
+      const t1 = (h + (rotr(e,6)^rotr(e,11)^rotr(e,25)) + ((e&f)^(~e&g)) + K[i] + w[i])|0;
+      const t2 = ((rotr(a,2)^rotr(a,13)^rotr(a,22)) + ((a&b)^(a&c)^(b&c)))|0;
+      h = g; g = f; f = e; e = (d+t1)|0; d = c; c = b; b = a; a = (t1+t2)|0;
+    }
+    [a,b,c,d,e,f,g,h].forEach((v,i) => H[i] = (H[i]+v)|0);
+  }
+  return H.map(v => (v>>>0).toString(16).padStart(8,'0')).join('');
+}
+function askPwd(title, confirmField){
+  return new Promise(resolve => {
+    pwdOpen = true;
+    const box = $('#pwd');
+    box.innerHTML = `<div class="backdrop" id="pwdBd"><div class="pwdbox" role="dialog" aria-label="${esc(title)}">
+      <h2 style="margin:0 0 10px; font-size:15px">${esc(title)}</h2>
+      <label class="nom">Mot de passe</label><input type="password" id="pw1" autocomplete="off">
+      ${confirmField ? '<label class="nom">Confirmation</label><input type="password" id="pw2" autocomplete="off">' : ''}
+      <p class="err" id="pwErr"></p>
+      <div class="row" style="justify-content:flex-end; margin:0"><button id="pwCancel">Annuler</button><button class="primary" id="pwOk">Valider</button></div>
+    </div></div>`;
+    const close = v => { pwdOpen = false; box.innerHTML = ''; resolve(v); };
+    const ok = () => {
+      const v1 = $('#pw1').value;
+      if(!v1){ $('#pwErr').textContent = 'Saisissez le mot de passe.'; return; }
+      if(confirmField && v1 !== $('#pw2').value){ $('#pwErr').textContent = 'Les deux saisies sont différentes.'; return; }
+      close(v1);
+    };
+    $('#pwOk').onclick = ok;
+    $('#pwCancel').onclick = () => close(null);
+    box.querySelectorAll('input').forEach(i => i.onkeydown = e => {
+      $('#pwErr').textContent = '';
+      if(e.key==='Enter') ok(); if(e.key==='Escape') close(null);
+    });
+    $('#pw1').focus();
+  });
+}
+function updateLock(){
+  const b = $('#lock');
+  b.classList.toggle('on', unlocked);
+  b.textContent = unlocked ? '🔓 Administration active' : '🔒 Administration';
+  b.title = unlocked ? 'Cliquer pour verrouiller' : 'Mode administration (mot de passe)';
+}
+async function requireAdmin(){
+  if(unlocked) return true;
+  if(!adminHash){
+    const p = await askPwd("Définir le mot de passe d'administration", true);
+    if(!p) return false;
+    const h = await sha(p);
+    try{ await grist.setOption('adminHash', h); }
+    catch(e){ alert("Enregistrement du mot de passe impossible : il faut les droits d'édition sur le document."); return false; }
+    adminHash = h; unlocked = true; updateLock(); return true;
+  }
+  const p = await askPwd("Mot de passe d'administration", false);
+  if(!p) return false;
+  if(await sha(p) === adminHash){ unlocked = true; updateLock(); return true; }
+  alert('Mot de passe incorrect.');
+  return false;
+}
+async function changePwd(){
+  if(!await requireAdmin()) return;
+  const p = await askPwd('Nouveau mot de passe', true);
+  if(!p) return;
+  try{ const h = await sha(p); await grist.setOption('adminHash', h); adminHash = h; alert('Mot de passe modifié.'); }
+  catch(e){ alert("Enregistrement du mot de passe impossible : il faut les droits d'édition sur le document."); }
+}
+$('#lock').onclick = async () => {
+  if(unlocked){ unlocked = false; updateLock(); render(); return; }
+  if(await requireAdmin()) render();
+};
+
+/* ================= Actions et tâches ================= */
+const T_ACT = 'Actions', T_TAC = 'Taches';
+const TACHE_LIB = 'A compléter - séminaire EQDIR';
+const ST_FIN = 'Terminée', ST_ABANDON = 'Abandonnée', ST_DEFAUT = 'À faire';
+let actions = [], taches = [], hasAT = false, hasRef = false, colsAct = new Set(), colsTac = new Set();
+const val = (t, c, i, d) => (t && c in t) ? (t[c][i] ?? d) : d;
+function loadActionsTaches(ta, tt){
+  colsAct = new Set(ta ? Object.keys(ta) : []);
+  colsTac = new Set(tt ? Object.keys(tt) : []);
+  hasAT = ['Projet','Groupement','Date_debut','Date_echeance'].every(c=>colsAct.has(c))
+       && ['Action','Date_debut','Date_echeance','Periode'].every(c=>colsTac.has(c));
+  hasRef = hasAT && ['Date_debut_ref','Date_echeance_ref'].every(c=>colsTac.has(c));
+  if(!hasAT){ actions = []; taches = []; return; }
+  actions = ta.id.map((id,i)=>({id, lib:val(ta,'Libelle',i,''), prj:ta.Projet[i], grp:ta.Groupement[i],
+    debut:ta.Date_debut[i], fin:ta.Date_echeance[i], imp:val(ta,'Impact',i,''), cols:val(ta,'Collaborateurs',i,''), sync:val(ta,'Synchro',i,'')}));
+  taches = tt.id.map((id,i)=>({id, lib:val(tt,'Libelle',i,''), act:tt.Action[i], debut:tt.Date_debut[i], fin:tt.Date_echeance[i],
+    periode:tt.Periode[i]||'', refDebut:val(tt,'Date_debut_ref',i,null), refFin:val(tt,'Date_echeance_ref',i,null),
+    statut:val(tt,'Statut',i,''), real:val(tt,'Date_realisation',i,null)}));
+}
+const only = (fields, cols) => Object.fromEntries(Object.entries(fields).filter(([k]) => cols.has(k)));
+const qYear = q => +((String(q).match(/(\d{4})/)||[])[1]) || 2027;
+const qStart = (qi, y) => Date.UTC(y, qi*3, 1)/1000;          // 1er jour du trimestre (secondes, minuit UTC)
+const qEnd   = (qi, y) => Date.UTC(y, qi*3+3, 0)/1000;        // dernier jour du trimestre
+const blockRange = label => { const m = String(label).match(/T(\d)(?:-T(\d))?/); return m ? [+m[1], +(m[2]||m[1])] : null; };
+
+// Planning attendu : une action par projet × groupement, une tâche par bloc de trimestres consécutifs
+function buildPlan(){
+  const plan = new Map();
+  affs.forEach(a => {
+    const qi = Q.indexOf(a.q); if(qi<0 || !a.prj || !a.grp) return;
+    const k = a.prj + '|' + a.grp;
+    const e = plan.get(k) || {prj:a.prj, grp:a.grp, qs:new Set(), imp:'Faible', cols:new Set()};
+    e.qs.add(qi); if(a.imp==='Fort') e.imp = 'Fort'; if(a.col) e.cols.add(cName(a.col));
+    plan.set(k, e);
+  });
+  plan.forEach(e => {
+    const qs = [...e.qs].sort((x,y)=>x-y), y = qYear(Q[qs[0]]);
+    e.debut = qStart(qs[0], y); e.fin = qEnd(qs[qs.length-1], y);
+    e.blocks = [];
+    qs.forEach(qi => { const b = e.blocks[e.blocks.length-1]; if(b && b.to===qi-1) b.to = qi; else e.blocks.push({from:qi, to:qi}); });
+    e.blocks.forEach(b => { b.label = b.from===b.to ? QS[b.from] : QS[b.from]+'-'+QS[b.to]; b.debut = qStart(b.from, y); b.fin = qEnd(b.to, y); });
+    e.libelle = 'Action_' + gName(e.grp);
+    e.colsTxt = [...e.cols].sort((x,y)=>x.localeCompare(y,'fr')).join(', ');
+  });
+  return plan;
+}
+function computeSync(){
+  const plan = buildPlan();
+  const r = {addActs:[], updActs:[], flag:[], addTasks:[], updTasks:[], gone:0};
+  const byKey = new Map();
+  actions.forEach(a => { const k = a.prj+'|'+a.grp; if(!byKey.has(k)) byKey.set(k, a); });
+  plan.forEach((e, k) => {
+    const act = byKey.get(k);
+    if(!act){ r.addActs.push(e); e.blocks.forEach(b => r.addTasks.push({e, b})); return; }
+    const f = {};
+    if(act.debut !== e.debut) f.Date_debut = e.debut;
+    if(act.fin !== e.fin) f.Date_echeance = e.fin;
+    if(colsAct.has('Impact') && act.imp !== e.imp) f.Impact = e.imp;
+    if(colsAct.has('Collaborateurs') && act.cols !== e.colsTxt) f.Collaborateurs = e.colsTxt;
+    if(colsAct.has('Libelle') && !act.lib) f.Libelle = e.libelle;
+    const gen = taches.filter(t => t.act===act.id && t.periode);
+    const used = new Set(), rest = [];
+    const upd = (t, b) => {
+      const g = {};
+      if(t.debut !== b.debut) g.Date_debut = b.debut;
+      if(t.fin !== b.fin) g.Date_echeance = b.fin;
+      if(t.periode !== b.label) g.Periode = b.label;
+      if(Object.keys(g).length) r.updTasks.push([t.id, g]);
+    };
+    e.blocks.forEach(b => { const t = gen.find(x => !used.has(x.id) && x.periode===b.label); if(t){ used.add(t.id); upd(t, b); } else rest.push(b); });
+    const free = gen.filter(t => !used.has(t.id)).sort((x,y) => (x.debut||0)-(y.debut||0));
+    rest.forEach(b => { const t = free.shift(); if(t){ used.add(t.id); upd(t, b); } else r.addTasks.push({actId:act.id, b}); });
+    r.gone += free.length;
+    const sync = free.map(t => `Tâche ${t.periode} retirée du planning`).join(' ; ');
+    if(colsAct.has('Synchro') && act.sync !== sync) f.Synchro = sync;
+    if(Object.keys(f).length) r.updActs.push([act.id, f]);
+  });
+  byKey.forEach((act, k) => {
+    const msg = "Plus d'impact au planning";
+    if(!plan.has(k) && colsAct.has('Synchro') && act.sync !== msg) r.flag.push([act.id, {Synchro: msg}]);
+  });
+  return r;
+}
+async function runSync(){
+  if(!hasAT){ alert('Créez les tables Actions et Taches (avec leurs colonnes) pour utiliser cette fonction.'); return; }
+  if(!await requireAdmin()) return;
+  const r = computeSync();
+  const n = r.addActs.length + r.updActs.length + r.flag.length + r.addTasks.length + r.updTasks.length;
+  if(!n){ alert('Les actions et les tâches sont déjà à jour.'); return; }
+  if(!confirm(`Mise à jour des tables Actions et Taches :\n\n`
+    + `• ${r.addActs.length} action(s) à créer\n• ${r.updActs.length} action(s) à mettre à jour\n`
+    + `• ${r.flag.length} action(s) sans impact au planning (signalées, non supprimées)\n`
+    + `• ${r.addTasks.length} tâche(s) à créer\n• ${r.updTasks.length} tâche(s) à mettre à jour\n`
+    + `• ${r.gone} tâche(s) retirée(s) du planning (signalées, non supprimées)\n\nContinuer ?`)) return;
+  try{
+    const ids = new Map();
+    if(r.addActs.length){
+      const res = await grist.docApi.applyUserActions(r.addActs.map(e => ['AddRecord', T_ACT, null, only({
+        Libelle:e.libelle, Projet:e.prj, Groupement:e.grp, Date_debut:e.debut, Date_echeance:e.fin,
+        Impact:e.imp, Collaborateurs:e.colsTxt, Synchro:''}, colsAct)]));
+      r.addActs.forEach((e, i) => ids.set(e, res.retValues[i]));
+    }
+    const acts = [
+      ...r.updActs.map(([id,f]) => ['UpdateRecord', T_ACT, id, f]),
+      ...r.flag.map(([id,f]) => ['UpdateRecord', T_ACT, id, f]),
+      ...r.addTasks.map(x => ['AddRecord', T_TAC, null, only({
+        Libelle:TACHE_LIB, Action: x.actId || ids.get(x.e), Date_debut:x.b.debut, Date_echeance:x.b.fin,
+        Periode:x.b.label, Statut:ST_DEFAUT}, colsTac)]),
+      ...r.updTasks.map(([id,f]) => ['UpdateRecord', T_TAC, id, f])
+    ];
+    if(acts.length) await grist.docApi.applyUserActions(acts);
+    await loadAll();
+    alert('Actions et tâches mises à jour.');
+  }catch(err){
+    console.error(err); await loadAll();
+    alert('Mise à jour interrompue : ' + err.message);
+  }
+}
+async function freezeRef(){
+  if(!hasRef){ alert('Ajoutez les colonnes Date_debut_ref et Date_echeance_ref dans la table Taches.'); return; }
+  if(!await requireAdmin()) return;
+  const r = computeSync();
+  if(r.addActs.length + r.addTasks.length + r.updTasks.length
+     && !confirm("Les tâches ne sont pas à jour du planning.\nLancez d'abord « Générer / mettre à jour les actions » (onglet P2A 2027).\n\nFiger quand même ?")) return;
+  const gen = taches.filter(t => t.periode);
+  const already = gen.filter(t => t.refFin);
+  const msg = already.length
+    ? `Une référence existe déjà pour ${already.length} tâche(s).\n\nLa remplacer par les dates actuelles des ${gen.length} tâches générées ?\nLes tâches créées depuis le précédent gel ne seront plus considérées comme « ajoutées ».`
+    : `Figer la référence (dates actuelles) pour ${gen.length} tâche(s) générée(s) ?`;
+  if(!confirm(msg)) return;
+  await act(gen.map(t => ['UpdateRecord', T_TAC, t.id, {Date_debut_ref:t.debut, Date_echeance_ref:t.fin}]));
+  alert('Référence figée.');
+}
+
+/* ================= Bilan 2027 ================= */
+const B = { grp:0, q:'' };
+const BK = { ok:'Tenue', lt:'En retard', ko:'Non réalisée', ad:'Ajoutée', rt:'Retirée du planning', ab:'Abandonnée', av:'À venir / en cours' };
+function bilanRows(){
+  const plan = buildPlan(), now = Date.now()/1000;
+  return taches.map(t => {
+    const a = actions.find(x => x.id===t.act); if(!a) return null;
+    const p = pObj(a.prj); if(!p) return null;
+    const e = plan.get(a.prj+'|'+a.grp);
+    const retired = !t.periode || !e || !e.blocks.some(b => b.label===t.periode);
+    let k;
+    if(t.statut === ST_ABANDON) k = 'ab';
+    else if(t.statut === ST_FIN) k = !t.refFin ? 'ad' : (t.real && t.real > t.refFin) ? 'lt' : 'ok';
+    else if(retired && t.periode) k = 'rt';
+    else if(!t.refFin) k = 'ad';
+    else if(now > t.refFin + 86400) k = 'ko';
+    else k = 'av';
+    return {t, a, p, k, replan: !!(t.refFin && t.fin && t.refFin !== t.fin)};
+  }).filter(Boolean);
+}
+const tauxTenue = l => { const c = l.filter(x=>['ok','lt','ko'].includes(x.k)).length; return c ? Math.round(100*l.filter(x=>x.k==='ok').length/c) : null; };
+function viewBilan(){
+  if(!hasAT) return `<div class="sheet"><h2>Bilan 2027</h2><p class="empty">Créez les tables <b>Actions</b> et <b>Taches</b> puis générez les actions depuis l'onglet P2A 2027.</p></div>`;
+  const qOpts = QS.map(s => `<option ${B.q===s?'selected':''}>${s}</option>`).join('');
+  let h = `<div class="toolbar no-print">
+    <div class="fg"><label>Groupement</label><select id="bG">${opts(grps, B.grp, [0,'Tous'])}</select></div>
+    <div class="fg"><label>Trimestre</label><select id="bQ"><option value="">Tous</option>${qOpts}</select></div>
+    ${pdFilters()}
+    <button class="primary" onclick="window.print()">Imprimer / PDF</button>
+    <button class="admin" id="bRef" title="Réservé à l'administration">🔒 Figer la référence</button>
+    ${unlocked ? '<button class="admin" id="bPwd">Changer le mot de passe</button>' : ''}</div>`;
+  if(!hasRef) h += `<p class="hint no-print">Ajoutez les colonnes Date_debut_ref et Date_echeance_ref (dates), Statut (choix : À faire, En cours, Terminée, Abandonnée) et Date_realisation (date) dans la table Taches.</p>`;
+  const qn = B.q ? QS.indexOf(B.q)+1 : 0;
+  const rows = bilanRows().filter(x => matchPD(x.p) && (!B.grp || x.a.grp===B.grp)
+      && (!qn || (r => r && qn>=r[0] && qn<=r[1])(blockRange(x.t.periode))));
+  const cnt = k => rows.filter(x=>x.k===k).length;
+  const tx = tauxTenue(rows);
+  h += `<div class="sheet"><h2>Bilan 2027 — tenue des engagements</h2>
+    <div class="meta">${B.grp ? esc(gName(B.grp)) : 'Tous les groupements'}${B.q ? ' — ' + B.q : ''} — ${rows.length} tâche(s) — édité le ${today()}</div>
+    <div class="kpis">
+      <div class="kpi"><p>Taux de tenue</p><b>${tx===null ? '—' : tx + ' %'}</b></div>
+      <div class="kpi"><p>Tenues</p><b style="color:#2e7d4f">${cnt('ok')}</b></div>
+      <div class="kpi"><p>En retard</p><b style="color:#8a5a00">${cnt('lt')}</b></div>
+      <div class="kpi"><p>Non réalisées</p><b style="color:var(--red)">${cnt('ko')}</b></div>
+      <div class="kpi"><p>À venir / en cours</p><b>${cnt('av')}</b></div>
+      <div class="kpi"><p>Ajoutées</p><b style="color:#2f5d8a">${cnt('ad')}</b></div>
+      <div class="kpi"><p>Retirées / abandonnées</p><b>${cnt('rt') + cnt('ab')}</b></div>
+    </div>
+    <h3>Tenue par groupement</h3>`;
+  const gl = grps.filter(g => rows.some(x => x.a.grp===g.id));
+  gl.forEach(g => {
+    const l = rows.filter(x => x.a.grp===g.id);
+    const base = l.filter(x=>['ok','lt','ko'].includes(x.k)).length || 1;
+    const w = k => Math.round(100*l.filter(x=>x.k===k).length/base);
+    const t = tauxTenue(l);
+    h += `<div class="brow"><span>${esc(g.nom)}</span><div class="sbar">
+      <i style="width:${w('ok')}%;background:#2e7d4f"></i><i style="width:${w('lt')}%;background:#e0a526"></i><i style="width:${w('ko')}%;background:var(--red)"></i></div>
+      <span>${t===null ? '—' : t + ' %'}</span></div>`;
+  });
+  if(!gl.length) h += `<p class="empty">Aucune tâche ne correspond aux filtres.</p>`;
+  h += `<p class="legend">Vert : tenue ; orange : en retard ; rouge : non réalisée. Taux = tenues / (tenues + en retard + non réalisées).</p></div>`;
+  gl.forEach(g => {
+    const l = rows.filter(x => x.a.grp===g.id).sort((x,y) => byPrio(x.p,y.p) || (x.t.refFin||x.t.fin||0)-(y.t.refFin||y.t.fin||0));
+    h += `<div class="sheet"><h2>Bilan 2027 — ${esc(g.nom)}</h2><div class="meta">${l.length} tâche(s) — taux de tenue ${tauxTenue(l)===null?'—':tauxTenue(l)+' %'} — édité le ${today()}</div>
+      <table class="grid fixed"><colgroup><col style="width:34%"><col style="width:9%"><col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:9%"><col style="width:12%"></colgroup>
+      <tr><th>Projet / tâche</th><th>Période</th><th>Échéance réf.</th><th>Échéance actuelle</th><th>Réalisée le</th><th>Statut</th><th>Bilan</th></tr>`;
+    l.forEach(x => {
+      h += `<tr><td><b>${esc(x.p.nom)}</b> ${prioBadge(x.p)} ${ddBadge(x.p)}<div class="nom">${esc(x.a.lib || 'Action_'+gName(x.a.grp))} — ${esc(x.t.lib)}</div></td>
+        <td>${esc(x.t.periode || '—')}</td>
+        <td>${x.t.refFin ? fmtDate(x.t.refFin) : '—'}</td>
+        <td>${x.t.fin ? fmtDate(x.t.fin) : '—'}${x.replan ? '<span class="rp">replanifiée</span>' : ''}</td>
+        <td>${x.t.real ? fmtDate(x.t.real) : '—'}</td>
+        <td>${esc(x.t.statut || '—')}</td>
+        <td><span class="bk bk-${x.k}">${BK[x.k]}</span></td></tr>`;
+    });
+    h += `</table></div>`;
+  });
+  setTimeout(() => {
+    $('#bG').onchange = e => { B.grp = +e.target.value; render(); };
+    $('#bQ').onchange = e => { B.q = e.target.value; render(); };
+    $('#bRef').onclick = freezeRef;
+    if($('#bPwd')) $('#bPwd').onclick = changePwd;
+  });
+  return h;
+}
+
 /* ================= Rafraîchissement automatique ================= */
 // Ignoré si : onglet masqué, glisser en cours, fiche projet ouverte, ou liste/saisie en cours d'utilisation
 setInterval(() => {
-  if(document.hidden || dragging || modalPrj) return;
+  if(document.hidden || dragging || modalPrj || pwdOpen) return;
   const el = document.activeElement;
   if(el && /^(SELECT|INPUT|TEXTAREA)$/.test(el.tagName)) return;
   loadAll(true);
