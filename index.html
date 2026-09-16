@@ -109,9 +109,9 @@
   .gantt th,.gantt td{padding:4px 6px; font-size:12px; vertical-align:middle;}
   .gantt th{background:#f1efe8; text-align:center; border-bottom:1px solid var(--line);}
   .gantt th.lft{text-align:left;}
-  .gantt tr.row td{border-bottom:1px solid #eeece5;}
+  .gantt tr.prow td{border-bottom:1px solid #eeece5;}
   .gantt td.q{border-left:1px dashed #e0ddd3; padding:3px 0;}
-  .gantt .bar{height:18px; font-size:10px; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:600;}
+  .gantt .bar{margin-left:-1px; height:18px; font-size:10px; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:600;}
   .gantt .bar.Faible{color:var(--ink); font-weight:400;}
   .gantt .bar.first{border-radius:4px 0 0 4px; margin-left:4px;} .gantt .bar.last{border-radius:0 4px 4px 0; margin-right:4px;}
   .gantt .pn{font-weight:600;} .gantt .pm{font-size:10px; color:var(--muted);}
@@ -162,7 +162,7 @@ const PALETTE = ['#1f6fb2','#c0392b','#2e8b57','#8e44ad','#d35400','#16a085','#7
 let grps=[], collabs=[], projets=[], affs=[], hasCollab=false, hasPrjCollab=false, hasPrio=false, hasDD=false, hasCom=false;
 let seuil = SEUIL_DEFAUT;
 let view = 'kanban';
-const F = { porteur:0, pcol:0, impacte:0, collab:0, prio:'', dd:'' }; // filtres kanban (pcol = collaborateur porteur)
+const F = { grp:0, col:0, prio:'', dd:'', txt:'' };  // filtres kanban : groupement, collaborateur
 let modalPrj = null;                                // id projet ouvert
 let chargeOpen = new Set();
 const E = { type:'grp', id:'all', prj:'all' };      // sélection des états
@@ -180,14 +180,21 @@ const gName = id => (grps.find(g=>g.id===id)||{}).nom || '—';
 const cName = id => (collabs.find(c=>c.id===id)||{}).nom || '—';
 const pObj  = id => projets.find(p=>p.id===id);
 const porteurTxt = p => esc(gName(p.porteur)) + (p.pcol ? ` <span class="nom">(${esc(cName(p.pcol))})</span>` : '');
-const matchPD = p => (!F.prio || (F.prio==='__none' ? !p.prio : p.prio===F.prio)) && (!F.dd || (F.dd==='oui') === p.dd);
-const matchPorteur = p => (!F.porteur || p.porteur===F.porteur) && (!F.pcol || p.pcol===F.pcol) && matchPD(p);
+const norm = v => String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+const matchTxt = p => !F.txt || norm(p.nom).includes(norm(F.txt));
+const matchPD = p => matchTxt(p) && (!F.prio || (F.prio==='__none' ? !p.prio : p.prio===F.prio)) && (!F.dd || (F.dd==='oui') === p.dd);
+// « À planifier » : projets dont le groupement / collaborateur filtré est porteur
+const matchPorteur = p => (!F.grp || p.porteur===F.grp) && (!F.col || p.pcol===F.col) && matchPD(p);
 const prioRank = p => { const i = PRIOS.indexOf(p.prio); return i<0 ? 99 : i; };
 const byPrio = (a,b) => prioRank(a)-prioRank(b) || a.nom.localeCompare(b.nom,'fr');
 const prioBadge = p => p.prio ? `<span class="badge b-${esc(p.prio)}">${esc(p.prio)}</span>` : '';
 const ddBadge = p => p.dd ? `<span class="badge dd">Roadmap DDSIS</span>` : '';
+function txtFilter(){
+  return `<div class="fg"><label>Intitulé du projet</label>
+    <input type="text" id="fTxt" placeholder="Mot du libellé" value="${esc(F.txt)}" style="min-width:180px"></div>`;
+}
 function pdFilters(){
-  return (hasPrio ? `<div class="fg"><label>Priorité</label><select id="fPrio">
+  return txtFilter() + (hasPrio ? `<div class="fg"><label>Priorité</label><select id="fPrio">
       <option value="">Toutes</option>${PRIOS.map(v=>`<option ${F.prio===v?'selected':''}>${v}</option>`).join('')}
       <option value="__none" ${F.prio==='__none'?'selected':''}>Sans priorité</option></select></div>` : '')
    + (hasDD ? `<div class="fg"><label>Roadmap DDSIS</label><select id="fDD">
@@ -195,6 +202,12 @@ function pdFilters(){
       <option value="non" ${F.dd==='non'?'selected':''}>Non</option></select></div>` : '');
 }
 function bindPD(){
+  const t = $('#fTxt');
+  if(t) t.oninput = () => {
+    const pos = t.selectionStart;
+    F.txt = t.value; render();
+    const n = $('#fTxt'); if(n){ n.focus(); n.setSelectionRange(pos, pos); }
+  };
   if($('#fPrio')) $('#fPrio').onchange = e => { F.prio = e.target.value; render(); };
   if($('#fDD')) $('#fDD').onchange = e => { F.dd = e.target.value; render(); };
 }
@@ -284,8 +297,10 @@ function render(){
 /* ================= Vue Kanban ================= */
 function visibleAffs(prjId, q){
   let l = affs.filter(a=>a.prj===prjId && a.q===q);
-  if(F.impacte) l = l.filter(a=>a.grp===F.impacte);
-  if(F.collab)  l = l.filter(a=>a.col===F.collab);
+  // Trimestres : affectations qui impactent le groupement / collaborateur filtré
+  if(F.col){ const g = (collabs.find(c=>c.id===F.col)||{}).grp;
+             l = l.filter(a => a.col===F.col || (!a.col && a.grp===g)); }
+  else if(F.grp) l = l.filter(a=>a.grp===F.grp);
   return l;
 }
 function chipsHtml(list){
@@ -315,31 +330,27 @@ function cardHtml(p, q, list){
   </div>`;
 }
 function viewKanban(){
-  const collabList = F.impacte ? collabs.filter(c=>c.grp===F.impacte) : collabs;
+  const collabList = F.grp ? collabs.filter(c=>c.grp===F.grp) : collabs;
   let h = `<div class="toolbar">
-    <div class="fg"><label>Groupement porteur</label>
-      <select id="fPorteur">${opts(grps, F.porteur, [0,'Tous'])}</select></div>
-    ${hasPrjCollab ? `<div class="fg"><label>Collaborateur porteur</label>
-      <select id="fPcol">${opts(F.porteur ? collabs.filter(c=>c.grp===F.porteur) : collabs, F.pcol, [0,'Tous'])}</select></div>` : ''}
-    <div class="fg"><label>Groupement impacté</label>
-      <select id="fImpacte">${opts(grps, F.impacte, [0,'Tous'])}</select></div>
-    ${hasCollab ? `<div class="fg"><label>Collaborateur impacté</label>
-      <select id="fCollab">${opts(collabList, F.collab, [0,'Tous'])}</select></div>` : ''}
+    <div class="fg"><label>Groupement</label>
+      <select id="fGrp">${opts(grps, F.grp, [0,'Tous'])}</select></div>
+    ${hasCollab || hasPrjCollab ? `<div class="fg"><label>Collaborateur</label>
+      <select id="fCol" style="min-width:180px">${opts(collabList, F.col, [0,'Tous'])}</select></div>` : ''}
     ${pdFilters()}
     <button id="fReset">Réinitialiser</button>
   </div><div class="board">`;
 
-  // Colonne "À planifier" : projets sans aucune affectation
+  // Colonne "À planifier" : projets sans affectation dont le filtre est porteur
   const todo = projets.filter(p => matchPorteur(p) && !affs.some(a=>a.prj===p.id)).sort(byPrio);
   h += `<div class="col todo" data-drop=""><div class="col-head"><b>À planifier</b><span class="n">${todo.length}</span></div>`;
   h += todo.length ? todo.map(p=>cardHtml(p,null,null)).join('') : `<div class="empty">Tous les projets sont placés.</div>`;
   h += `</div>`;
 
   Q.forEach((q,qi) => {
-    const cards = projets.filter(matchPorteur).sort(byPrio)
+    const cards = projets.filter(matchPD).sort(byPrio)
                          .map(p => [p, visibleAffs(p.id,q)]).filter(([,l])=>l.length);
     h += `<div class="col" data-drop="${qi}"><div class="col-head"><b>${QS[qi]}</b><span class="n">${cards.length} projet(s)</span></div>`;
-    const target = F.collab ? ['col',F.collab] : F.impacte ? ['grp',F.impacte] : null;
+    const target = F.col ? ['col',F.col] : F.grp ? ['grp',F.grp] : null;
     if(target){
       const v = target[0]==='col' ? chargeCol(target[1],q) : chargeGrp(target[1],q);
       const w = Math.min(100, v/seuil*100);
@@ -349,19 +360,18 @@ function viewKanban(){
     h += cards.length ? cards.map(([p,l])=>cardHtml(p,q,l)).join('') : `<div class="empty">Déposez un projet ici.</div>`;
     h += `</div>`;
   });
-  h += `</div><p class="hint">Glisser une carte déplace toutes les affectations du projet sur ce trimestre.
-    Maj + glisser la copie (projet sur plusieurs trimestres). Depuis « À planifier », le projet est affecté
-    au groupement impacté filtré, sinon au groupement porteur, en impact faible. Clic sur une carte : affectations détaillées.</p>`;
+  h += `</div><p class="hint">« À planifier » : projets non planifiés dont le groupement / collaborateur filtré est porteur.
+    Trimestres : projets qui impactent le groupement / collaborateur filtré.
+    Glisser une carte déplace les affectations affichées ; Maj + glisser les copie.
+    Depuis « À planifier », le projet est affecté à son groupement porteur (ou au collaborateur filtré), en impact faible. Clic sur une carte : affectations détaillées.</p>`;
   return h;
 }
 function bindKanban(){
-  $('#fPorteur').onchange = e => { F.porteur = +e.target.value;
-    if(F.pcol && F.porteur && (collabs.find(c=>c.id===F.pcol)||{}).grp !== F.porteur) F.pcol = 0; render(); };
-  if($('#fPcol')) $('#fPcol').onchange = e => { F.pcol = +e.target.value; render(); };
-  $('#fImpacte').onchange = e => { F.impacte = +e.target.value;
-    if(F.collab && (collabs.find(c=>c.id===F.collab)||{}).grp !== F.impacte && F.impacte) F.collab = 0; render(); };
-  if($('#fCollab')) $('#fCollab').onchange = e => { F.collab = +e.target.value; render(); };
-  $('#fReset').onclick = () => { F.porteur=F.pcol=F.impacte=F.collab=0; F.prio=F.dd=''; render(); };
+  $('#fGrp').onchange = e => { F.grp = +e.target.value;
+    if(F.col && F.grp && (collabs.find(c=>c.id===F.col)||{}).grp !== F.grp) F.col = 0; render(); };
+  if($('#fCol')) $('#fCol').onchange = e => { F.col = +e.target.value;
+    const c = collabs.find(x=>x.id===F.col); if(c) F.grp = c.grp; render(); };
+  $('#fReset').onclick = () => { F.grp=F.col=0; F.prio=F.dd=F.txt=''; render(); };
 
   document.querySelectorAll('.card').forEach(c => {
     c.ondragend = () => { dragging = false; };
@@ -384,23 +394,23 @@ function bindKanban(){
 async function moveProject(prjId, from, to, copy){
   if(from === to) return;
   const p = pObj(prjId); if(!p) return;
-  // Retour vers "À planifier" : suppression des affectations du trimestre d'origine
+  // Retour vers "À planifier" : suppression des affectations visibles du trimestre d'origine
   if(to === null){
-    const src = affs.filter(a=>a.prj===prjId && a.q===from);
+    const src = visibleAffs(prjId, from);
     if(src.length && confirm(`Retirer « ${p.nom} » de ${from} (${src.length} affectation(s)) ?`) && confirmCom(src))
       await act(src.map(a=>['RemoveRecord', T.AFF, a.id]));
     return;
   }
   // Première planification
   if(from === null){
-    let grp = F.impacte || p.porteur, col = 0;
-    if(F.collab){ col = F.collab; grp = (collabs.find(c=>c.id===col)||{}).grp || grp; }
+    let grp = p.porteur, col = 0;
+    if(F.col && hasCollab){ col = F.col; grp = (collabs.find(c=>c.id===col)||{}).grp || grp; }
     if(!grp){ alert("Ce projet n'a pas de groupement porteur : ouvrez sa fiche pour l'affecter."); return; }
     await act([addAff(prjId, grp, col, to, 'Faible')]);
     return;
   }
-  // Déplacement ou copie entre trimestres
-  const src = affs.filter(a=>a.prj===prjId && a.q===from);
+  // Déplacement ou copie entre trimestres (affectations visibles avec le filtre actif)
+  const src = visibleAffs(prjId, from);
   const actions = [];
   src.forEach(s => {
     const dup = affs.find(a=>a.prj===prjId && a.grp===s.grp && a.col===s.col && a.q===to);
@@ -664,16 +674,17 @@ function viewEtatPrio(){
     ${S.type==='prio' ? `<div class="fg"><label>Priorité</label><select id="sVal">
       <option value="all">Toutes (une page chacune)</option>
       ${[...PRIOS,'__none'].map(v=>`<option value="${v}" ${S.val===v?'selected':''}>${v==='__none'?'Sans priorité':v}</option>`).join('')}</select></div>` : ''}
+    ${txtFilter()}
     <button class="primary" onclick="window.print()">Imprimer / PDF</button></div>`;
   if(S.type==='prio'){
     const vals = S.val==='all' ? [...PRIOS,'__none'] : [S.val];
     vals.forEach(v => {
-      const list = projets.filter(p => v==='__none' ? !p.prio : p.prio===v).sort(byPrio);
+      const list = projets.filter(p => matchTxt(p) && (v==='__none' ? !p.prio : p.prio===v)).sort(byPrio);
       if(S.val==='all' && v==='__none' && !list.length) return;
       h += sheetListe(v==='__none' ? 'Projets sans priorité' : `Projets de priorité ${v}`, 'Planning 2027', list);
     });
   } else {
-    h += sheetListe('Projets de la Roadmap DDSIS', 'Planning 2027', projets.filter(p=>p.dd).sort(byPrio));
+    h += sheetListe('Projets de la Roadmap DDSIS', 'Planning 2027', projets.filter(p=>p.dd && matchTxt(p)).sort(byPrio));
   }
   setTimeout(() => {
     $('#sType').onchange = e => { S.type = e.target.value; S.val = 'all'; render(); };
@@ -712,7 +723,7 @@ function sheetP2A(g){
     const meta = P.mode==='porteur'
       ? (p.pcol ? esc(cName(p.pcol)) : '') + (pa.length ? '' : (p.pcol?' — ':'') + 'non planifié')
       : 'Porteur : ' + porteurTxt(p);
-    h += `<tr class="row"><td><div class="pn">${esc(p.nom)} ${prioBadge(p)} ${ddBadge(p)}</div><div class="pm">${meta}</div></td>
+    h += `<tr class="prow"><td><div class="pn">${esc(p.nom)} ${prioBadge(p)} ${ddBadge(p)}</div><div class="pm">${meta}</div></td>
       ${ganttCells(pa, P.mode==='porteur' ? color : gColor(p.porteur))}</tr>`;
   });
   h += `</table><p class="legend">Barre pleine : impact fort ; barre claire : impact faible.
