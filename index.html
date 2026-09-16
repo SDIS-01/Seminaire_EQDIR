@@ -554,7 +554,7 @@ function viewCharge(){
 /* ================= États groupement / collaborateur ================= */
 function cellList(list, showNames){
   return list.map(a => {
-    const who = a.col ? (showNames ? ` <span class="nom">${esc(cName(a.col))}</span>` : '') : (showNames ? ' <span class="nom">groupement</span>' : '');
+    const who = a.col && showNames ? ` <span class="nom">${esc(cName(a.col))}</span>` : '';
     return `<div><span class="chip ${esc(a.imp)}">${esc(a.imp||'?')}</span>${who}</div>${comHtml(a)}`;
   }).join('');
 }
@@ -587,12 +587,12 @@ function sheetCollab(c){
     h += `<tr><td>${esc(p.nom)} ${prioBadge(p)} ${ddBadge(p)}</td><td>${porteurTxt(p)}</td>`;
     Q.forEach(q => {
       const o = own.filter(a=>a.prj===p.id && a.q===q), v = via.filter(a=>a.prj===p.id && a.q===q);
-      h += `<td>${cellList(o,false)}${v.map(a=>`<div class="via"><span class="chip ${esc(a.imp)}">${esc(a.imp||'?')}</span> <span class="nom">via groupement</span></div>${comHtml(a)}`).join('')}</td>`;
+      h += `<td>${cellList(o,false)}${v.map(a=>`<div class="via"><span class="chip ${esc(a.imp)}">${esc(a.imp||'?')}</span></div>${comHtml(a)}`).join('')}</td>`;
     });
     h += `</tr>`;
   });
   h += `<tr><th colspan="2">Charge du collaborateur (seuil ${seuil})</th>${Q.map(q=>{const v=chargeCol(c.id,q);return `<td class="heat ${lvl(v)}">${v} pts</td>`;}).join('')}</tr></table>`;
-  return h + `<p class="legend">La charge du collaborateur ne compte que les affectations nominatives. Les lignes « via groupement » concernent tout le groupement.</p></div>`;
+  return h + `<p class="legend">La charge du collaborateur ne compte que les affectations nominatives. Les impacts en italique concernent l'ensemble de son groupement.</p></div>`;
 }
 function viewEtat(){
   const canCol = hasCollab;
