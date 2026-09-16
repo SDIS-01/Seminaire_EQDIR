@@ -116,6 +116,11 @@
   .gantt .bar.first{border-radius:4px 0 0 4px; margin-left:4px;} .gantt .bar.last{border-radius:0 4px 4px 0; margin-right:4px;}
   .gantt .pn{font-weight:600;} .gantt .pm{font-size:10px; color:var(--muted);}
   .grp-band td{background:var(--suit); color:#fff; font-weight:600; padding:5px 8px;}
+  .cbtn{border:0; background:transparent; padding:0 2px; cursor:pointer; font-size:13px;}
+  .cbtn.vide{opacity:.3;} .cbtn:hover{opacity:1; background:transparent;}
+  .com{font-size:11px; color:#4a4f55; font-style:italic; margin:2px 0 4px; white-space:pre-wrap;}
+  .com-edit{background:#f6f5f0; border:1px solid var(--line); border-radius:8px; padding:10px; margin-top:10px;}
+  .com-edit textarea{width:100%; min-height:70px; font:inherit; padding:6px; border-radius:6px; border:1px solid #bdb9ad;}
   @media (max-width:900px){ .board{grid-template-columns:1fr 1fr;} }
 </style>
 </head>
@@ -154,7 +159,7 @@ const PALETTE = ['#1f6fb2','#c0392b','#2e8b57','#8e44ad','#d35400','#16a085','#7
                  '#b8336a','#3d5a80','#6a994e','#bc6c25','#5e548e','#0081a7','#9c6644'];
 
 /* ================= État ================= */
-let grps=[], collabs=[], projets=[], affs=[], hasCollab=false, hasPrjCollab=false, hasPrio=false, hasDD=false;
+let grps=[], collabs=[], projets=[], affs=[], hasCollab=false, hasPrjCollab=false, hasPrio=false, hasDD=false, hasCom=false;
 let seuil = SEUIL_DEFAUT;
 let view = 'kanban';
 const F = { porteur:0, pcol:0, impacte:0, collab:0, prio:'', dd:'' }; // filtres kanban (pcol = collaborateur porteur)
@@ -164,6 +169,7 @@ const E = { type:'grp', id:'all', prj:'all' };      // sélection des états
 let loadSeq = 0;
 let lastSig = '';                                   // signature des données affichées
 let dragging = false;
+let comEdit = null;                                 // id d'affectation dont le commentaire est en cours d'édition
 const P = { mode:'porteur', g:'all' };              // options P2A
 const S = { type:'prio', val:'all' };               // état priorité / DDSIS
 
@@ -199,6 +205,9 @@ const chargeGrp = (g,q) => sum(affs.filter(a=>a.grp===g && a.q===q));
 const chargeCol = (c,q) => sum(affs.filter(a=>a.col===c && a.q===q));
 const lvl = v => v<=0 ? 'lvl-0' : v/seuil < .7 ? 'lvl-ok' : v<=seuil ? 'lvl-warn' : 'lvl-over';
 const lvlColor = v => ({'lvl-0':'#cfcfcf','lvl-ok':'var(--ok)','lvl-warn':'var(--warn)','lvl-over':'var(--over)'})[lvl(v)];
+const comHtml = a => a.com ? `<div class="com">💬 ${esc(a.com)}</div>` : '';
+const confirmCom = list => { const c = list.filter(a=>a.com); return !c.length ||
+  confirm(`Cette suppression efface aussi ${c.length>1?'les commentaires':'le commentaire'} :\n\n${c.map(a=>'• '+a.com).join('\n')}\n\nContinuer ?`); };
 const today = () => new Date().toLocaleDateString('fr-FR');
 const opts = (list, sel, all) => (all ? `<option value="${all[0]}">${esc(all[1])}</option>` : '') +
   list.map(x=>`<option value="${x.id}" ${x.id==sel?'selected':''}>${esc(x.nom)}</option>`).join('');
@@ -226,9 +235,9 @@ async function loadAll(auto){
                                  prio: hasPrio ? (p.Priorite[i]||'') : '',
                                  dd: hasDD ? p.DDSIS[i]===DD_VAL : false}))
                .sort((x,y)=>x.nom.localeCompare(y.nom,'fr'));
-    hasCollab = 'Collaborateur' in a;
+    hasCollab = 'Collaborateur' in a; hasCom = 'Commentaire' in a;
     affs = a.id.map((id,i)=>({id, prj:a.Projet[i], grp:a.Groupement[i], col:hasCollab ? (a.Collaborateur[i]||0) : 0,
-                              q:a.Trimestre[i], imp:a.Impact[i]}));
+                              q:a.Trimestre[i], imp:a.Impact[i], com: hasCom ? (a.Commentaire[i]||'').trim() : ''}));
     setStatus(hasCollab ? '' : "Colonne Affectation.Collaborateur absente : la distinction par collaborateur est désactivée.");
     render();
   }catch(err){
@@ -283,14 +292,16 @@ function chipsHtml(list){
   // Regroupe par groupement : impact le plus fort + noms des collaborateurs
   const by = {};
   list.forEach(a => {
-    const k = a.grp; by[k] = by[k] || {imp:'Faible', noms:[], grpLevel:false};
+    const k = a.grp; by[k] = by[k] || {imp:'Faible', noms:[], grpLevel:false, coms:[]};
+    if(a.com) by[k].coms.push((a.col ? cName(a.col)+' : ' : '') + a.com);
     if(a.imp==='Fort') by[k].imp = 'Fort';
     if(a.col) by[k].noms.push(cName(a.col)); else by[k].grpLevel = true;
   });
   return Object.entries(by).map(([g,v]) => {
-    const title = `${gName(+g)} — impact ${v.imp}` + (v.noms.length ? ` — ${v.noms.join(', ')}` : '');
+    const title = `${gName(+g)} — impact ${v.imp}` + (v.noms.length ? ` — ${v.noms.join(', ')}` : '')
+                + (v.coms.length ? `\n💬 ${v.coms.join('\n💬 ')}` : '');
     const extra = v.noms.length ? ` · ${v.noms.length}👤` : '';
-    return `<span class="tag" title="${esc(title)}">${esc(gName(+g))} <b class="${esc(v.imp)}">${esc((v.imp||'?').toLowerCase())}</b>${extra}</span>`;
+    return `<span class="tag" title="${esc(title)}">${esc(gName(+g))} <b class="${esc(v.imp)}">${esc((v.imp||'?').toLowerCase())}</b>${extra}${v.coms.length ? ' 💬' : ''}</span>`;
   }).join('');
 }
 function cardHtml(p, q, list){
@@ -376,7 +387,7 @@ async function moveProject(prjId, from, to, copy){
   // Retour vers "À planifier" : suppression des affectations du trimestre d'origine
   if(to === null){
     const src = affs.filter(a=>a.prj===prjId && a.q===from);
-    if(src.length && confirm(`Retirer « ${p.nom} » de ${from} (${src.length} affectation(s)) ?`))
+    if(src.length && confirm(`Retirer « ${p.nom} » de ${from} (${src.length} affectation(s)) ?`) && confirmCom(src))
       await act(src.map(a=>['RemoveRecord', T.AFF, a.id]));
     return;
   }
@@ -394,14 +405,18 @@ async function moveProject(prjId, from, to, copy){
   src.forEach(s => {
     const dup = affs.find(a=>a.prj===prjId && a.grp===s.grp && a.col===s.col && a.q===to);
     if(copy){ if(!dup) actions.push(addAff(prjId, s.grp, s.col, to, s.imp)); }
-    else if(dup) actions.push(['RemoveRecord', T.AFF, s.id]);
+    else if(dup){
+      if(hasCom && s.com && s.com !== dup.com)
+        actions.push(['UpdateRecord', T.AFF, dup.id, {Commentaire: dup.com ? dup.com + '\n' + s.com : s.com}]);
+      actions.push(['RemoveRecord', T.AFF, s.id]);
+    }
     else actions.push(['UpdateRecord', T.AFF, s.id, {Trimestre:to}]);
   });
   await act(actions);
 }
 /* ================= Fiche projet (modale) ================= */
-function openModal(id){ modalPrj = id; renderModal(); }
-function closeModal(){ modalPrj = null; renderModal(); }
+function openModal(id){ modalPrj = id; comEdit = null; renderModal(); }
+function closeModal(){ modalPrj = null; comEdit = null; renderModal(); }
 function renderModal(){
   const m = $('#modal');
   const p = modalPrj && pObj(modalPrj);
@@ -409,14 +424,11 @@ function renderModal(){
   const pa = affs.filter(a=>a.prj===p.id);
   let h = `<div class="backdrop" id="bd"><div class="modal" role="dialog" aria-label="Fiche projet">
     <h2>Fiche projet</h2>
-    <div class="row">
-      <div class="fg" style="flex:1"><label>Libellé</label><input type="text" id="mNom" value="${esc(p.nom)}"></div>
-      <div class="fg"><label>Groupement porteur</label><select id="mPorteur">${opts(grps, p.porteur, [0,'—'])}</select></div>
-      ${hasPrjCollab ? `<div class="fg"><label>Collaborateur porteur</label><select id="mPcol">${opts(collabs.filter(c=>!p.porteur||c.grp===p.porteur), p.pcol, [0,'—'])}</select></div>` : ''}
-      ${hasPrio ? `<div class="fg"><label>Priorité</label><select id="mPrio"><option value="">—</option>${PRIOS.map(v=>`<option ${p.prio===v?'selected':''}>${v}</option>`).join('')}</select></div>` : ''}
-      ${hasDD ? `<div class="fg"><label>Roadmap DDSIS</label><label style="font-size:13px;color:var(--ink);padding:6px 0"><input type="checkbox" id="mDD" ${p.dd?'checked':''}> Oui</label></div>` : ''}
-      <button class="primary" id="mSave">Enregistrer</button>
+    <div class="banner" style="--suit:${gColor(p.porteur)}; border-radius:6px; font-size:13px; padding:6px 10px; margin-bottom:10px">
+      <span class="flag">⚑</span><span>${esc(gName(p.porteur))}</span>${p.pcol ? `<span class="who">${esc(cName(p.pcol))}</span>` : ''}${prioBadge(p)}${ddBadge(p)}
     </div>
+    <p style="font-size:15px; font-weight:600; margin:0 0 4px">${esc(p.nom)}</p>
+    <p class="hint" style="margin:0 0 8px">Les informations du projet se modifient dans la table Projet de Grist.</p>
     <h3>Impact par groupement</h3>
     <p class="hint" style="margin:0 0 6px">Clic sur une case : aucun → faible → fort → aucun (affectation du groupement entier).</p>
     <div style="overflow-x:auto"><table class="grid"><tr><th>Groupement</th>${QS.map(s=>`<th class="c">${s}</th>`).join('')}</tr>`;
@@ -425,22 +437,30 @@ function renderModal(){
     Q.forEach((q,qi) => {
       const a = pa.find(x=>x.grp===g.id && !x.col && x.q===q);
       const nomi = pa.filter(x=>x.grp===g.id && x.col && x.q===q).length;
+      const cb = a && hasCom ? `<button class="cbtn ${a.com?'':'vide'}" data-com="${a.id}" title="${esc(a.com||'Ajouter un commentaire')}" aria-label="Commentaire">💬</button>` : '';
       h += `<td class="c cell" tabindex="0" data-g="${g.id}" data-qi="${qi}">
-        ${a ? `<span class="chip ${esc(a.imp)}">${esc(a.imp||'?')}</span>` : ''}
+        ${a ? `<span class="chip ${esc(a.imp)}">${esc(a.imp||'?')}</span>${cb}` : ''}
         ${nomi ? `<span class="nom" title="Affectations nominatives">${nomi}👤</span>` : ''}</td>`;
     });
     h += `</tr>`;
   });
   h += `</table></div>`;
+  if(!hasCom) h += `<p class="hint">Ajoutez la colonne <b>Commentaire</b> (texte) dans la table Affectation pour activer les commentaires.</p>`;
+  const ce = comEdit && affs.find(a=>a.id===comEdit && a.prj===p.id);
+  if(ce) h += `<div class="com-edit"><b>Commentaire — ${esc(gName(ce.grp))}${ce.col?' / '+esc(cName(ce.col)):''} — ${esc(ce.q)}</b>
+      <textarea id="comTxt">${esc(ce.com)}</textarea>
+      <div class="row" style="margin:6px 0 0"><button class="primary" id="comSave">Enregistrer le commentaire</button>
+      <button id="comCancel">Annuler</button>${ce.com?'<button class="danger" id="comClear">Effacer</button>':''}</div></div>`;
 
   h += `<h3>Affectations nominatives</h3>`;
   if(!hasCollab){
     h += `<p class="hint">Ajoutez la colonne <b>Collaborateur</b> (Référence → Collaborateur) dans la table Affectation pour activer cette section.</p>`;
   } else {
     const nom = pa.filter(a=>a.col).sort((x,y)=>x.q.localeCompare(y.q) || cName(x.col).localeCompare(cName(y.col),'fr'));
-    h += nom.length ? `<table class="grid"><tr><th>Collaborateur</th><th>Groupement</th><th>Trimestre</th><th>Impact</th><th></th></tr>` +
+    h += nom.length ? `<table class="grid"><tr><th>Collaborateur</th><th>Groupement</th><th>Trimestre</th><th>Impact</th>${hasCom?'<th>Commentaire</th>':''}<th></th></tr>` +
       nom.map(a=>`<tr><td>${esc(cName(a.col))}</td><td>${esc(gName(a.grp))}</td><td>${esc(a.q)}</td>
         <td><button data-cyc="${a.id}">${esc(a.imp||'?')}</button></td>
+        ${hasCom ? `<td><button class="cbtn ${a.com?'':'vide'}" data-com="${a.id}" aria-label="Commentaire">💬</button> <span class="nom">${esc(a.com)}</span></td>` : ''}
         <td><button class="danger" data-del="${a.id}">Retirer</button></td></tr>`).join('') + `</table>`
       : `<p class="hint" style="margin:0">Aucun collaborateur désigné nominativement.</p>`;
     h += `<div class="row" style="margin-top:8px">
@@ -457,32 +477,30 @@ function renderModal(){
 
   $('#bd').onclick = e => { if(e.target.id==='bd') closeModal(); };
   $('#mClose').onclick = closeModal;
-  $('#mSave').onclick = () => {
-    const f = {Libelle_Projet:$('#mNom').value.trim(), Groupement_Porteur:+$('#mPorteur').value};
-    if(hasPrjCollab){
-      f.Collaborateur = +$('#mPcol').value;
-      const c = collabs.find(x=>x.id===f.Collaborateur);
-      if(c && f.Groupement_Porteur && c.grp!==f.Groupement_Porteur) f.Collaborateur = 0;
-    }
-    if(hasPrio) f.Priorite = $('#mPrio').value || '';
-    if(hasDD) f.DDSIS = $('#mDD').checked ? DD_VAL : '';
-    act([['UpdateRecord', T.PRJ, p.id, f]]);
-  };
-  if($('#mPcol')) $('#mPorteur').onchange = e => {
-    const g = +e.target.value;
-    $('#mPcol').innerHTML = opts(collabs.filter(c=>!g||c.grp===g), 0, [0,'—']);
-  };
   m.querySelectorAll('.cell').forEach(td => {
     const cyc = () => {
       const g = +td.dataset.g, q = Q[+td.dataset.qi];
       const a = pa.find(x=>x.grp===g && !x.col && x.q===q);
       if(!a) act([addAff(p.id, g, 0, q, 'Faible')]);
       else if(a.imp==='Faible') act([['UpdateRecord', T.AFF, a.id, {Impact:'Fort'}]]);
-      else act([['RemoveRecord', T.AFF, a.id]]);
+      else if(confirmCom([a])) act([['RemoveRecord', T.AFF, a.id]]);
     };
     td.onclick = cyc; td.onkeydown = e => { if(e.key==='Enter'||e.key===' '){ e.preventDefault(); cyc(); } };
   });
-  m.querySelectorAll('[data-del]').forEach(b => b.onclick = () => act([['RemoveRecord', T.AFF, +b.dataset.del]]));
+  m.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
+    const a = affs.find(x=>x.id===+b.dataset.del);
+    if(a && confirmCom([a])) act([['RemoveRecord', T.AFF, a.id]]);
+  });
+  m.querySelectorAll('[data-com]').forEach(b => b.onclick = e => {
+    e.stopPropagation(); comEdit = +b.dataset.com; renderModal();
+    const t = $('#comTxt'); if(t){ t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
+  });
+  if(ce){
+    const saveCom = v => { comEdit = null; act([['UpdateRecord', T.AFF, ce.id, {Commentaire: v}]]); };
+    $('#comSave').onclick = () => saveCom($('#comTxt').value.trim());
+    $('#comCancel').onclick = () => { comEdit = null; renderModal(); };
+    if($('#comClear')) $('#comClear').onclick = () => { if(confirm('Effacer ce commentaire ?')) saveCom(''); };
+  }
   m.querySelectorAll('[data-cyc]').forEach(b => b.onclick = () => {
     const a = affs.find(x=>x.id===+b.dataset.cyc);
     act([['UpdateRecord', T.AFF, a.id, {Impact: a.imp==='Fort' ? 'Faible' : 'Fort'}]]);
@@ -527,7 +545,7 @@ function viewCharge(){
 function cellList(list, showNames){
   return list.map(a => {
     const who = a.col ? (showNames ? ` <span class="nom">${esc(cName(a.col))}</span>` : '') : (showNames ? ' <span class="nom">groupement</span>' : '');
-    return `<div><span class="chip ${esc(a.imp)}">${esc(a.imp||'?')}</span>${who}</div>`;
+    return `<div><span class="chip ${esc(a.imp)}">${esc(a.imp||'?')}</span>${who}</div>${comHtml(a)}`;
   }).join('');
 }
 function sheetGroupement(g){
@@ -545,10 +563,6 @@ function sheetGroupement(g){
     });
     h += `<tr><th colspan="2">Charge (seuil ${seuil})</th>${Q.map(q=>{const v=chargeGrp(g.id,q);return `<td class="heat ${lvl(v)}">${v} pts</td>`;}).join('')}</tr></table>`;
   }
-  const portes = projets.filter(p=>p.porteur===g.id && matchPD(p)).sort(byPrio);
-  if(portes.length) h += `<h3>Projets portés (${portes.length})</h3><p style="margin:0">${portes.map(p=>{
-      const qs = QS.filter((s,i)=>affs.some(a=>a.prj===p.id && a.q===Q[i]));
-      return `${esc(p.nom)} <span class="nom">(${p.pcol?esc(cName(p.pcol))+' — ':''}${qs.length?qs.join(', '):'non planifié'})</span>`; }).join(' ; ')}</p>`;
   return h + `<p class="legend">Faible = 1 pt, Fort = 2 pts. La charge du groupement inclut ses affectations nominatives.</p></div>`;
 }
 function sheetCollab(c){
@@ -556,16 +570,14 @@ function sheetCollab(c){
   const via = affs.filter(a=>a.grp===c.grp && !a.col);
   const prjIds = [...new Set([...own,...via].map(a=>a.prj))];
   const list = projets.filter(p=>prjIds.includes(p.id) && matchPD(p)).sort(byPrio);
-  const portes = projets.filter(p=>p.pcol===c.id && matchPD(p)).sort(byPrio);
   let h = `<div class="sheet"><h2>État de ${esc(c.nom)}</h2><div class="meta">Groupement ${esc(gName(c.grp))} — planning 2027 — édité le ${today()}</div>`;
-  if(portes.length) h += `<p style="margin:0 0 10px"><b>Projets portés :</b> ${portes.map(p=>esc(p.nom)).join(' ; ')}</p>`;
   if(!list.length) return h + `<p class="empty">Aucun projet ne concerne ce collaborateur.</p></div>`;
   h += `<table class="grid"><tr><th>Projet</th><th>Porteur</th>${QS.map(s=>`<th>${s}</th>`).join('')}</tr>`;
   list.forEach(p => {
     h += `<tr><td>${esc(p.nom)} ${prioBadge(p)} ${ddBadge(p)}</td><td>${porteurTxt(p)}</td>`;
     Q.forEach(q => {
       const o = own.filter(a=>a.prj===p.id && a.q===q), v = via.filter(a=>a.prj===p.id && a.q===q);
-      h += `<td>${cellList(o,false)}${v.map(a=>`<div class="via"><span class="chip ${esc(a.imp)}">${esc(a.imp||'?')}</span> <span class="nom">via groupement</span></div>`).join('')}</td>`;
+      h += `<td>${cellList(o,false)}${v.map(a=>`<div class="via"><span class="chip ${esc(a.imp)}">${esc(a.imp||'?')}</span> <span class="nom">via groupement</span></div>${comHtml(a)}`).join('')}</td>`;
     });
     h += `</tr>`;
   });
@@ -632,8 +644,9 @@ function sheetListe(titre, meta, list){
     h += `<tr><td>${esc(p.nom)} ${prioBadge(p)} ${ddBadge(p)}</td><td>${porteurTxt(p)}</td>`;
     Q.forEach(q => {
       const by = {};
-      la.filter(a=>a.prj===p.id && a.q===q).forEach(a => { if(!by[a.grp] || a.imp==='Fort') by[a.grp] = a.imp; });
-      h += `<td>${Object.entries(by).map(([g,imp])=>`<div class="tag" style="display:inline-block;margin:1px">${esc(gName(+g))} <b class="${esc(imp)}">${esc((imp||'?').toLowerCase())}</b></div>`).join('')}</td>`;
+      const cm = {};
+      la.filter(a=>a.prj===p.id && a.q===q).forEach(a => { if(!by[a.grp] || a.imp==='Fort') by[a.grp] = a.imp; if(a.com) (cm[a.grp] = cm[a.grp]||[]).push(a.com); });
+      h += `<td>${Object.entries(by).map(([g,imp])=>`<div class="tag" style="display:inline-block;margin:1px" ${cm[g]?`title="${esc(cm[g].join('\n'))}"`:''}>${esc(gName(+g))} <b class="${esc(imp)}">${esc((imp||'?').toLowerCase())}</b>${cm[g]?' 💬':''}</div>`).join('')}</td>`;
     });
     h += `</tr>`;
   });
@@ -673,11 +686,13 @@ function viewEtatPrio(){
 function ganttCells(list, color){
   // list : affectations d'un projet (déjà restreintes) ; barre continue sur les trimestres occupés
   const imp = Q.map(q => { const l = list.filter(a=>a.q===q); return !l.length ? '' : l.some(a=>a.imp==='Fort') ? 'Fort' : 'Faible'; });
+  const coms = Q.map(q => list.filter(a=>a.q===q && a.com).map(a=>gName(a.grp)+' : '+a.com));
   return imp.map((v,i) => {
     if(!v) return `<td class="q"></td>`;
     const cls = [v, !imp[i-1]?'first':'', !imp[i+1]?'last':''].join(' ');
     const bg = v==='Fort' ? color : color + '55';
-    return `<td class="q"><div class="bar ${cls}" style="background:${bg}">${v.toLowerCase()}</div></td>`;
+    const c = coms[i].length;
+    return `<td class="q"><div class="bar ${cls}" style="background:${bg}" ${c?`title="${esc(coms[i].join('\n'))}"`:''}>${v.toLowerCase()}${c?' 💬':''}</div></td>`;
   }).join('');
 }
 function sheetP2A(g){
