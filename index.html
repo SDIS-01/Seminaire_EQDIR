@@ -19,7 +19,7 @@
   .tab:hover{background:var(--table-dark);}
   .tab.on{background:var(--paper); color:var(--table); font-weight:600;}
   .hright{margin-left:auto; display:flex; gap:8px; align-items:center; font-size:12px;}
-  .hright input{width:48px; padding:3px 5px; border-radius:4px; border:0; font:inherit;}
+  
   main{padding:14px;}
   select,button,input[type=text]{font:inherit; padding:6px 9px; border-radius:6px; border:1px solid #bdb9ad; background:#fff; color:var(--ink);}
   button{cursor:pointer;} button:hover{background:#efede6;}
@@ -52,6 +52,7 @@
   .suit{display:inline-block; font-size:10px; font-weight:600; padding:1px 6px; border-radius:10px; color:#fff; background:var(--suit);}
   .chips{display:flex; flex-wrap:wrap; gap:4px;}
   .tag{font-size:10px; padding:1px 6px; border-radius:4px; border:1px solid #bdb9ad; background:#fff; white-space:nowrap;}
+  .tag.hl{border:2px solid var(--ink); font-weight:600;}
   .tag b.Fort{color:var(--over);} .tag b.Faible{color:var(--warn);}
   .chip{font-size:10px; padding:1px 6px; border-radius:10px; border:1px solid var(--line); background:#fff; white-space:nowrap;}
   .chip.Fort{border-color:#e1b3ae; background:var(--over-bg); color:var(--over); font-weight:600;}
@@ -76,6 +77,7 @@
   .porteur-row td:first-child{font-weight:600;}
   .heat{font-weight:600; text-align:center; min-width:90px;}
   .lvl-0{background:#fff; color:var(--muted);}
+  .lvl-n{background:#eef1ee; color:var(--ink);}
   .lvl-ok{background:var(--ok-bg); color:var(--ok);}
   .lvl-warn{background:var(--warn-bg); color:var(--warn);}
   .lvl-over{background:var(--over-bg); color:var(--over);}
@@ -137,7 +139,6 @@
     <button class="tab" data-v="p2a">P2A 2027</button>
   </nav>
   <div class="hright">
-    <label>Seuil de charge <input id="seuil" type="number" min="1" step="1"></label>
     <button id="refresh" title="Recharger les données">Actualiser</button>
   </div>
 </header>
@@ -153,6 +154,7 @@ const QS = ['T1','T2','T3','T4'];                 // libellés courts
 const POIDS = { Faible:1, Fort:2 };
 const PRIOS = ['P1','P2','P3','Poursuite'];         // ordre de tri
 const DD_VAL = 'Roadmap DDSIS';
+const USE_SEUIL = false;                           // seuil de charge désactivé pour l'instant
 const SEUIL_DEFAUT = 6;
 const REFRESH_MS = 30000;                          // rafraîchissement automatique (ms)                            // points par trimestre
 const PALETTE = ['#1f6fb2','#c0392b','#2e8b57','#8e44ad','#d35400','#16a085','#7f5539',
@@ -216,7 +218,7 @@ const pts = a => POIDS[a.imp] || 0;
 const sum = arr => arr.reduce((s,a)=>s+pts(a),0);
 const chargeGrp = (g,q) => sum(affs.filter(a=>a.grp===g && a.q===q));
 const chargeCol = (c,q) => sum(affs.filter(a=>a.col===c && a.q===q));
-const lvl = v => v<=0 ? 'lvl-0' : v/seuil < .7 ? 'lvl-ok' : v<=seuil ? 'lvl-warn' : 'lvl-over';
+const lvl = v => v<=0 ? 'lvl-0' : !USE_SEUIL ? 'lvl-n' : v/seuil < .7 ? 'lvl-ok' : v<=seuil ? 'lvl-warn' : 'lvl-over';
 const lvlColor = v => ({'lvl-0':'#cfcfcf','lvl-ok':'var(--ok)','lvl-warn':'var(--warn)','lvl-over':'var(--over)'})[lvl(v)];
 const comHtml = a => a.com ? `<div class="com">💬 ${esc(a.com)}</div>` : '';
 const confirmCom = list => { const c = list.filter(a=>a.com); return !c.length ||
@@ -229,7 +231,6 @@ function setStatus(msg, err){ const s=$('#status'); s.textContent=msg||''; s.cla
 /* ================= Grist ================= */
 grist.ready({ requiredAccess:'full' });
 grist.onRecords(() => loadAll());
-grist.onOptions(o => { if(o && o.seuil){ seuil = Number(o.seuil)||SEUIL_DEFAUT; $('#seuil').value = seuil; render(); } });
 
 async function loadAll(auto){
   const seq = ++loadSeq;
@@ -273,12 +274,6 @@ const addAff = (prj,grp,col,q,imp) => ['AddRecord', T.AFF, null, affFields(prj,g
 /* ================= Navigation ================= */
 document.querySelectorAll('.tab').forEach(b => b.onclick = () => { view = b.dataset.v; render(); });
 $('#refresh').onclick = () => loadAll();
-$('#seuil').value = seuil;
-$('#seuil').onchange = e => {
-  const v = Math.max(1, Number(e.target.value)||SEUIL_DEFAUT);
-  seuil = v; e.target.value = v; render();
-  grist.setOption('seuil', v).catch(()=>{});
-};
 
 function render(){
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.v===view));
@@ -303,7 +298,15 @@ function visibleAffs(prjId, q){
   else if(F.grp) l = l.filter(a=>a.grp===F.grp);
   return l;
 }
-function chipsHtml(list){
+// « BERTIN Frédéric » -> « BERTIN F. » (mots en majuscules = nom, autres = prénom)
+function shortName(n){
+  const w = String(n||'').trim().split(/\s+/);
+  const nom = w.filter(x => x === x.toUpperCase());
+  const pre = w.filter(x => x !== x.toUpperCase());
+  if(!nom.length || !pre.length) return n;
+  return nom.join(' ') + ' ' + pre.map(x => x[0] + '.').join('');
+}
+function chipsHtml(list, hlGrp){
   // Regroupe par groupement : impact le plus fort + noms des collaborateurs
   const by = {};
   list.forEach(a => {
@@ -315,17 +318,21 @@ function chipsHtml(list){
   return Object.entries(by).map(([g,v]) => {
     const title = `${gName(+g)} — impact ${v.imp}` + (v.noms.length ? ` — ${v.noms.join(', ')}` : '')
                 + (v.coms.length ? `\n💬 ${v.coms.join('\n💬 ')}` : '');
-    const extra = v.noms.length ? ` · ${v.noms.length}👤` : '';
-    return `<span class="tag" title="${esc(title)}">${esc(gName(+g))} <b class="${esc(v.imp)}">${esc((v.imp||'?').toLowerCase())}</b>${extra}${v.coms.length ? ' 💬' : ''}</span>`;
-  }).join('');
+    const sn = v.noms.map(shortName);
+    const extra = !sn.length ? '' : ' · ' + esc(sn.slice(0,2).join(', ')) + (sn.length>2 ? ` +${sn.length-2}` : '');
+    return `<span class="tag ${+g===hlGrp?'hl':''}" data-g="${g}" title="${esc(title)}">${esc(gName(+g))} <b class="${esc(v.imp)}">${esc((v.imp||'?').toLowerCase())}</b>${extra}${v.coms.length ? ' 💬' : ''}</span>`;
+  }).sort((x,y) => (y.includes(' hl"')?1:0) - (x.includes(' hl"')?1:0)).join('');
 }
 function cardHtml(p, q, list){
+  // Toutes les affectations du trimestre sont affichées ; le groupement filtré est mis en avant
+  const hl = F.col ? (collabs.find(c=>c.id===F.col)||{}).grp : F.grp;
+  if(list) list = affs.filter(a=>a.prj===p.id && a.q===q);
   return `<div class="card" tabindex="0" draggable="true" style="--suit:${gColor(p.porteur)}"
             data-prj="${p.id}" data-q="${q===null?'':Q.indexOf(q)}">
     <div class="banner"><span class="flag">⚑</span><span>${esc(gName(p.porteur))}</span>${p.pcol ? `<span class="who">${esc(cName(p.pcol))}</span>` : ''}${prioBadge(p)}${ddBadge(p)}</div>
     <div class="body">
       <div class="t">${esc(p.nom)}</div>
-      ${list ? `<div class="k">Impact</div><div class="chips">${chipsHtml(list)}</div>` : ''}
+      ${list ? `<div class="k">Impact</div><div class="chips">${chipsHtml(list, hl)}</div>` : ''}
     </div>
   </div>`;
 }
@@ -350,13 +357,6 @@ function viewKanban(){
     const cards = projets.filter(matchPD).sort(byPrio)
                          .map(p => [p, visibleAffs(p.id,q)]).filter(([,l])=>l.length);
     h += `<div class="col" data-drop="${qi}"><div class="col-head"><b>${QS[qi]}</b><span class="n">${cards.length} projet(s)</span></div>`;
-    const target = F.col ? ['col',F.col] : F.grp ? ['grp',F.grp] : null;
-    if(target){
-      const v = target[0]==='col' ? chargeCol(target[1],q) : chargeGrp(target[1],q);
-      const w = Math.min(100, v/seuil*100);
-      h += `<div class="gauge-lbl" style="color:${lvlColor(v)}">Charge ${esc(target[0]==='col'?cName(target[1]):gName(target[1]))} : ${v} / ${seuil} pts</div>
-            <div class="gauge"><i style="width:${w}%;background:${lvlColor(v)}"></i></div>`;
-    }
     h += cards.length ? cards.map(([p,l])=>cardHtml(p,q,l)).join('') : `<div class="empty">Déposez un projet ici.</div>`;
     h += `</div>`;
   });
@@ -527,9 +527,8 @@ document.addEventListener('keydown', e => { if(e.key==='Escape' && modalPrj) clo
 /* ================= Vue Charge ================= */
 function viewCharge(){
   let h = `<div class="toolbar no-print"><button id="cPrint" onclick="window.print()">Imprimer</button>
-    <span class="hint" style="margin:0">Points par trimestre (faible = 1, fort = 2), seuil ${seuil}.
-    Vert &lt; 70 %, orange jusqu'au seuil, rouge au-delà.${hasCollab?' Clic sur un groupement : détail par collaborateur (affectations nominatives).':''}</span></div>
-    <div class="sheet"><h2>Charge des groupements — 2027</h2><div class="meta">Édité le ${today()} — seuil ${seuil} pts</div>
+    <span class="hint" style="margin:0">Points par trimestre (faible = 1, fort = 2).${hasCollab?' Clic sur un groupement : détail par collaborateur (affectations nominatives).':''}</span></div>
+    <div class="sheet"><h2>Charge des groupements — 2027</h2><div class="meta">Édité le ${today()} </div>
     <table class="grid"><tr><th>Groupement</th>${QS.map(s=>`<th class="c">${s}</th>`).join('')}<th class="c">Projets</th></tr>`;
   grps.forEach(g => {
     const open = chargeOpen.has(g.id);
@@ -571,7 +570,7 @@ function sheetGroupement(g){
       Q.forEach(q => h += `<td>${cellList(ga.filter(a=>a.prj===p.id && a.q===q), hasCollab)}</td>`);
       h += `</tr>`;
     });
-    h += `<tr><th colspan="2">Charge (seuil ${seuil})</th>${Q.map(q=>{const v=chargeGrp(g.id,q);return `<td class="heat ${lvl(v)}">${v} pts</td>`;}).join('')}</tr></table>`;
+    h += `<tr><th colspan="2">Charge</th>${Q.map(q=>{const v=chargeGrp(g.id,q);return `<td class="heat ${lvl(v)}">${v} pts</td>`;}).join('')}</tr></table>`;
   }
   return h + `<p class="legend">Faible = 1 pt, Fort = 2 pts. La charge du groupement inclut ses affectations nominatives.</p></div>`;
 }
@@ -591,7 +590,7 @@ function sheetCollab(c){
     });
     h += `</tr>`;
   });
-  h += `<tr><th colspan="2">Charge du collaborateur (seuil ${seuil})</th>${Q.map(q=>{const v=chargeCol(c.id,q);return `<td class="heat ${lvl(v)}">${v} pts</td>`;}).join('')}</tr></table>`;
+  h += `<tr><th colspan="2">Charge du collaborateur</th>${Q.map(q=>{const v=chargeCol(c.id,q);return `<td class="heat ${lvl(v)}">${v} pts</td>`;}).join('')}</tr></table>`;
   return h + `<p class="legend">La charge du collaborateur ne compte que les affectations nominatives. Les impacts en italique concernent l'ensemble de son groupement.</p></div>`;
 }
 function viewEtat(){
