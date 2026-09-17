@@ -529,25 +529,25 @@ function viewKanbanPI(){
   const todo = mine.filter(p => !piAffs(p.id).length);
   h += `<div class="board ${K.todoOpen?'':'todo-closed'}">`;
   if(K.todoOpen){
-    const pool = K.pool==='vivier' ? mine : todo;
+    const pool = K.pool==='portefeuille' ? mine : todo;
     h += `<div class="col todo" data-drop=""><div class="col-head">
       <span style="display:flex; gap:3px; flex-wrap:wrap">
         <button class="subtab ${K.pool==='todo'?'on':''}" data-pool="todo" title="Projets pas encore planifiés sur ${cible}">À planifier (${todo.length})</button>
-        <button class="subtab ${K.pool==='vivier'?'on':''}" data-pool="vivier" title="Tous les projets de ${esc(gName(K.pg))}">Vivier (${mine.length})</button></span>
+        <button class="subtab ${K.pool==='portefeuille'?'on':''}" data-pool="portefeuille" title="Tous les projets de ${esc(gName(K.pg))}">Portefeuille (${mine.length})</button></span>
       <button class="colbtn" id="todoToggle" title="Replier la colonne">◀</button></div>`;
     h += pool.length ? pool.map(p => {
       let st = '';
-      if(K.pool==='vivier'){
+      if(K.pool==='portefeuille'){
         const qs = QS.filter((x,i) => piAffs(p.id, Q[i]).length);
         const ailleurs = affsOf(p.id).length;
         st = qs.length ? `Sur ${cible} : <b>${qs.join(', ')}</b>`
            : `Pas encore sur ${cible}` + (ailleurs ? ' — planifié ailleurs' : ' — non planifié');
       } else if(affsOf(p.id).length) st = 'Déjà planifié sur d\'autres groupements';
       return cardHtml(p, null, null, st);
-    }).join('') : `<div class="empty">${K.pool==='vivier' ? 'Aucun projet porté.' : `Tous les projets sont planifiés sur ${cible}.`}</div>`;
+    }).join('') : `<div class="empty">${K.pool==='portefeuille' ? 'Aucun projet porté.' : `Tous les projets sont planifiés sur ${cible}.`}</div>`;
     h += `</div>`;
   } else {
-    h += `<div class="col todo closed" data-drop="" id="todoToggle" title="Déplier"><div class="vlab">＋ À planifier (${todo.length}) · Vivier (${mine.length})</div></div>`;
+    h += `<div class="col todo closed" data-drop="" id="todoToggle" title="Déplier"><div class="vlab">＋ À planifier (${todo.length}) · Portefeuille (${mine.length})</div></div>`;
   }
   Q.forEach((q, qi) => {
     const cards = mine.map(p => [p, piAffs(p.id, q)]).filter(([,l]) => l.length);
@@ -556,7 +556,7 @@ function viewKanbanPI(){
     h += cards.length ? cards.map(([p,l]) => cardHtml(p, q, l)).join('') : `<div class="empty">Déposez un projet ici.</div>`;
     h += `</div>`;
   });
-  return h + `</div><p class="hint">Vue ${esc(gName(K.pg))} → ${cible}. « À planifier » : projets de ${esc(gName(K.pg))} sans impact sur ${cible} ; « Vivier » : tous ses projets.
+  return h + `</div><p class="hint">Vue ${esc(gName(K.pg))} → ${cible}. « À planifier » : projets de ${esc(gName(K.pg))} sans impact sur ${cible} ; « Portefeuille » : tous ses projets.
     Glisser vers un trimestre crée l'impact (faible) sur ${cible} ; entre trimestres, seul cet impact est déplacé (Maj + glisser : copie) ; vers la colonne de gauche : retrait.
     Clic sur une étiquette : faible / fort. Points = charge que ${esc(gName(K.pg))} fait peser sur ${cible}.</p>`;
 }
@@ -674,7 +674,7 @@ async function moveProject(prjId, from, to, copy){
     let grp = p.porteur, col = 0;
     if(K.view==='pi'){
       grp = K.ig; col = hasCollab ? K.ic : 0;
-      if(affsOf(prjId).some(a => a.q===to && a.grp===grp && a.col===col)) return;   // déjà présent (vivier)
+      if(affsOf(prjId).some(a => a.q===to && a.grp===grp && a.col===col)) return;   // déjà présent (portefeuille)
     }
     else if(F.col && hasCollab){ col = F.col; grp = (collabs.find(c=>c.id===col)||{}).grp || grp; }
     if(!grp){ alert("Ce projet n'a pas de groupement porteur : ouvrez sa fiche pour l'affecter."); return; }
