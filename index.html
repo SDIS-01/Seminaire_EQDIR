@@ -163,6 +163,28 @@
   .bk-rt{background:var(--soft); color:#57534e;} .bk-ab{background:#efe6fb; color:#6b3fa0;}
   .bk-av{background:#fff; color:var(--muted); border:1px solid var(--line);}
   .rp{font-size:10px; color:var(--warn); display:block;}
+  .subtabs{display:flex; gap:4px; margin-bottom:10px;}
+  .subtab{border-radius:6px; padding:5px 11px; background:#fff;}
+  .subtab.on{background:var(--table); color:#fff; border-color:var(--table);}
+  .qgrid{display:grid; grid-template-columns:24px 1fr 1fr; grid-template-rows:auto 1fr 1fr; gap:8px;}
+  .qax{font-size:11px; color:var(--muted); text-align:center; align-self:end;}
+  .qay{font-size:11px; color:var(--muted); writing-mode:vertical-rl; transform:rotate(180deg); text-align:center; align-self:center;}
+  .qz{border-radius:10px; padding:8px; min-height:170px; border:2px dashed transparent;}
+  .qz.over{border-color:var(--table);}
+  .qz h4{margin:0; font-size:13px;} .qz .qs{font-size:11px; margin:0 0 8px; opacity:.8;}
+  .q1{background:#e3f3ea; color:#1f5e3d;} .q2{background:#e3ecf7; color:#244a73;}
+  .q3{background:#fbf0d8; color:#6e4a00;} .q4{background:#f6e2e0; color:#7d1f17;}
+  .vcard{background:#fff; color:var(--ink); border-left:4px solid var(--suit); border-radius:0 6px 6px 0; padding:5px 8px; margin-bottom:5px;
+         cursor:grab; box-shadow:0 1px 2px rgba(42,45,51,.1); font-size:12px;}
+  .vcard .vt{font-weight:600; line-height:1.25;} .vcard .vm{font-size:10px; color:var(--muted); margin-top:2px;}
+  .vpill{font-size:10px; font-weight:600; padding:1px 6px; border-radius:4px; background:var(--soft); white-space:nowrap;}
+  .vpill.manu{background:#e3ecf7; color:#2f5d8a;}
+  .qb{font-size:10px; font-weight:600; padding:2px 7px; border-radius:4px; white-space:nowrap;}
+  .rend{display:flex; align-items:center; gap:6px;} .rend i{display:block; height:10px; border-radius:2px;}
+  .vbtns{display:flex; gap:6px; margin:8px 0;} .vbtns button{min-width:44px; font-weight:600;}
+  .vbtns button.on{background:var(--table); color:#fff; border-color:var(--table);}
+  svg.scatter text{font-family:inherit;}
+  svg.scatter .pt{cursor:pointer;} svg.scatter .pt:hover circle{stroke:var(--ink); stroke-width:2;}
   @media (max-width:900px){ .board{grid-template-columns:1fr 1fr;} }
 </style>
 </head>
@@ -177,6 +199,7 @@
     <button class="tab" data-v="projet">État par projet</button>
     <button class="tab" data-v="prio">État priorité / DDSIS</button>
     <button class="tab" data-v="p2a">P2A 2027</button>
+    <button class="tab" data-v="ve">Valeur / effort</button>
     <button class="tab" data-v="bilan">Bilan 2027</button>
   </nav>
   <div class="hright">
@@ -188,6 +211,7 @@
 <main id="app"></main>
 <div id="modal"></div>
 <div id="pwd"></div>
+<div id="vedit"></div>
 
 <script>
 /* ================= Configuration ================= */
@@ -205,7 +229,7 @@ const PALETTE = ['#2f5d8a','#9b2c2c','#2e7d5b','#6b4fa0','#b3621b','#1f7a7a','#7
                  '#a33a6b','#44607f','#5b7f2e','#8a6d1f','#5a4e8c','#1b6f8f','#8b5e4a'];
 
 /* ================= État ================= */
-let grps=[], collabs=[], projets=[], affs=[], hasCollab=false, hasPrjCollab=false, hasPrio=false, hasDD=false, hasCom=false, hasJournal=false, journal=[];
+let grps=[], collabs=[], projets=[], affs=[], hasCollab=false, hasPrjCollab=false, hasValeur=false, hasPrio=false, hasDD=false, hasCom=false, hasJournal=false, journal=[];
 let seuil = SEUIL_DEFAUT;
 let view = 'kanban';
 const F = { grp:0, col:0, prio:'', dd:'', txt:'' };  // filtres kanban : groupement, collaborateur
@@ -301,10 +325,11 @@ async function loadAll(auto){
     grps = g.id.map((id,i)=>({id, nom:g.Groupement[i]||'(sans nom)'}));
     collabs = c.id.map((id,i)=>({id, nom:c.Collaborateur[i]||'(sans nom)', grp:c.Groupement[i]}))
                .sort((x,y)=>x.nom.localeCompare(y.nom,'fr'));
-    hasPrjCollab = 'Collaborateur' in p; hasPrio = 'Priorite' in p; hasDD = 'DDSIS' in p;
+    hasPrjCollab = 'Collaborateur' in p; hasValeur = 'Valeur' in p; hasPrio = 'Priorite' in p; hasDD = 'DDSIS' in p;
     projets = p.id.map((id,i)=>({id, nom:p.Libelle_Projet[i]||'(sans titre)', porteur:p.Groupement_Porteur[i],
                                  pcol: hasPrjCollab ? (p.Collaborateur[i]||0) : 0,
                                  prio: hasPrio ? (p.Priorite[i]||'') : '',
+                                 val: hasValeur ? (Number(p.Valeur[i])||0) : 0,
                                  dd: hasDD ? p.DDSIS[i]===DD_VAL : false}))
                .sort((x,y)=>x.nom.localeCompare(y.nom,'fr'));
     hasCollab = 'Collaborateur' in a; hasCom = 'Commentaire' in a;
@@ -353,6 +378,7 @@ function render(){
   else if(view==='projet') app.innerHTML = viewEtatProjet();
   else if(view==='prio') app.innerHTML = viewEtatPrio();
   else if(view==='p2a') app.innerHTML = viewP2A();
+  else if(view==='ve') app.innerHTML = viewVE();
   else app.innerHTML = viewBilan();
   if(view==='kanban') bindKanban();
   bindPD();
@@ -1196,6 +1222,190 @@ function viewBilan(){
     if($('#bPwd')) $('#bPwd').onclick = changePwd;
   });
   return h;
+}
+
+/* ================= Valeur / effort ================= */
+// Valeur mixte : colonne Projet.Valeur (1 à 4) si renseignée, sinon score automatique
+// (P1 = 3, P2 = 2, P3 = 1, Poursuite = 1, +1 si Roadmap DDSIS, plafonné à 4).
+// Effort : somme des points d'impact du projet (faible = 1, fort = 2), tous groupements et trimestres.
+const V = { sub:'nuage', grp:0 };
+const VAL_AUTO = { P1:3, P2:2, P3:1, Poursuite:1 };
+const VAL_HAUTE = 3;                                   // valeur ≥ 3 : valeur élevée
+const QD = {
+  1:{nom:'Gains rapides', desc:'Valeur élevée, effort faible — à lancer en priorité', cls:'q1', col:'#2e7d4f'},
+  2:{nom:'Projets majeurs', desc:'Valeur élevée, effort élevé — à planifier et soutenir', cls:'q2', col:'#2f5d8a'},
+  3:{nom:'Opportunités', desc:'Valeur faible, effort faible — si la capacité le permet', cls:'q3', col:'#b3721b'},
+  4:{nom:'À éviter', desc:'Valeur faible, effort élevé — reporter ou abandonner', cls:'q4', col:'#b42318'}
+};
+const autoVal = p => Math.min(4, (VAL_AUTO[p.prio] || 1) + (p.dd ? 1 : 0));
+const valeurOf = p => p.val >= 1 ? {v:Math.min(4, Math.round(p.val)), manu:true} : {v:autoVal(p), manu:false};
+const qBadge = q => `<span class="qb ${QD[q].cls}">${QD[q].nom}</span>`;
+const vPill = x => `<span class="vpill ${x.manu?'manu':''}" title="${x.manu?'Valeur ajustée':'Valeur calculée automatiquement'}">V${x.v}${x.manu?' ajustée':' auto'}</span>`;
+
+function veData(){
+  const list = projets.filter(p => matchPD(p) && (!V.grp || p.porteur===V.grp)).map(p => {
+    const pa = affs.filter(a => a.prj===p.id);
+    const vv = valeurOf(p);
+    return {p, eff:sum(pa), v:vv.v, manu:vv.manu, ng:new Set(pa.map(a=>a.grp)).size};
+  });
+  const planned = list.filter(x => x.eff > 0);
+  const effs = planned.map(x => x.eff).sort((a,b) => a-b);
+  const med = effs.length ? effs[Math.floor((effs.length-1)/2)] : 0;     // médiane : au-delà = effort élevé
+  planned.forEach(x => {
+    x.hiV = x.v >= VAL_HAUTE; x.hiE = x.eff > med;
+    x.qd = x.hiV ? (x.hiE ? 2 : 1) : (x.hiE ? 4 : 3);
+    x.ratio = x.v / x.eff;
+  });
+  return {planned, unplanned: list.filter(x => !x.eff), med};
+}
+
+function viewVE(){
+  const d = veData();
+  const subs = [['nuage','Nuage de points'],['zones','Zones de cartes'],['classement','Classement par rendement']];
+  let h = `<div class="toolbar no-print">
+    <div class="fg"><label>Groupement porteur</label><select id="vG">${opts(grps, V.grp, [0,'Tous'])}</select></div>
+    ${pdFilters()}
+    <button class="primary" onclick="window.print()">Imprimer / PDF</button></div>
+    <div class="subtabs no-print">${subs.map(([k,l]) => `<button class="subtab ${V.sub===k?'on':''}" data-sub="${k}">${l}</button>`).join('')}</div>`;
+  if(!hasValeur) h += `<p class="hint no-print">Ajoutez la colonne <b>Valeur</b> (numérique, de 1 à 4) dans la table Projet pour pouvoir ajuster la valeur. En attendant, la valeur est calculée automatiquement.</p>`;
+  h += `<div class="sheet"><h2>Valeur / effort — ${esc(subs.find(x=>x[0]===V.sub)[1])}</h2>
+    <div class="meta">${V.grp ? 'Porteur ' + esc(gName(V.grp)) : 'Tous les porteurs'} — ${d.planned.length} projet(s) planifié(s) — effort médian ${d.med} pt(s) — édité le ${today()}</div>`;
+  if(!d.planned.length) h += `<p class="empty">Aucun projet planifié ne correspond aux filtres.</p>`;
+  else if(V.sub==='nuage') h += veNuage(d);
+  else if(V.sub==='zones') h += veZones(d);
+  else h += veClassement(d);
+  if(d.unplanned.length) h += `<p class="legend">Non planifiés (effort nul, hors matrice) : ${d.unplanned.map(x => esc(x.p.nom)).join(' ; ')}</p>`;
+  h += `<p class="legend">Valeur : colonne Valeur si renseignée, sinon P1 = 3, P2 = 2, P3 = 1, Poursuite = 1, +1 si Roadmap DDSIS (max 4) ; valeur élevée à partir de ${VAL_HAUTE}.
+    Effort : somme des points d'impact (faible = 1, fort = 2) ; élevé au-delà de la médiane (${d.med}).
+    ${V.sub!=='classement' ? 'Clic sur un projet : ajuster sa valeur (mot de passe).' : ''}</p></div>`;
+  setTimeout(bindVE);
+  return h;
+}
+
+function veNuage(d){
+  const W = 900, H = 470, ml = 50, mr = 20, mt = 20, mb = 45;
+  const maxE = Math.max(...d.planned.map(x => x.eff)) + 1;
+  const X = e => ml + e/maxE * (W-ml-mr);
+  const Y = v => mt + (4.5 - v)/4 * (H-mt-mb);
+  const xm = X(d.med + .5), ym = Y(VAL_HAUTE - .5);
+  // décalage des points superposés
+  const seen = {};
+  const pts = d.planned.slice().sort((a,b) => b.ng - a.ng).map(x => {
+    const k = x.eff + '|' + x.v, n = seen[k] = (seen[k]||0) + 1;
+    const ang = n * 2.4, rad = n > 1 ? 9 * Math.sqrt(n-1) : 0;
+    return {...x, cx: X(x.eff) + rad*Math.cos(ang), cy: Y(x.v) + rad*Math.sin(ang), r: Math.min(18, 6 + 2*x.ng)};
+  });
+  let g = `<div style="overflow-x:auto"><svg class="scatter" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Nuage de points valeur en fonction de l'effort">
+    <rect x="${ml}" y="${mt}" width="${xm-ml}" height="${ym-mt}" fill="#e3f3ea"/>
+    <rect x="${xm}" y="${mt}" width="${W-mr-xm}" height="${ym-mt}" fill="#e3ecf7"/>
+    <rect x="${ml}" y="${ym}" width="${xm-ml}" height="${H-mb-ym}" fill="#fbf0d8"/>
+    <rect x="${xm}" y="${ym}" width="${W-mr-xm}" height="${H-mb-ym}" fill="#f6e2e0"/>
+    <text x="${ml+8}" y="${mt+16}" font-size="12" font-weight="600" fill="#1f5e3d">1. Gains rapides</text>
+    <text x="${W-mr-8}" y="${mt+16}" font-size="12" font-weight="600" fill="#244a73" text-anchor="end">2. Projets majeurs</text>
+    <text x="${ml+8}" y="${H-mb-8}" font-size="12" font-weight="600" fill="#6e4a00">3. Opportunités</text>
+    <text x="${W-mr-8}" y="${H-mb-8}" font-size="12" font-weight="600" fill="#7d1f17" text-anchor="end">4. À éviter</text>
+    <line x1="${ml}" y1="${H-mb}" x2="${W-mr}" y2="${H-mb}" stroke="#9a938a"/>
+    <line x1="${ml}" y1="${mt}" x2="${ml}" y2="${H-mb}" stroke="#9a938a"/>`;
+  for(let e = 0; e < maxE; e += Math.max(1, Math.ceil(maxE/12)))
+    g += `<text x="${X(e)}" y="${H-mb+14}" font-size="10" fill="#6f6a63" text-anchor="middle">${e}</text>`;
+  [1,2,3,4].forEach(v => g += `<text x="${ml-8}" y="${Y(v)+3}" font-size="10" fill="#6f6a63" text-anchor="end">V${v}</text>`);
+  g += `<text x="${(ml+W-mr)/2}" y="${H-8}" font-size="11" fill="#6f6a63" text-anchor="middle">Effort (points d'impact)</text>
+    <text x="14" y="${(mt+H-mb)/2}" font-size="11" fill="#6f6a63" text-anchor="middle" transform="rotate(-90 14 ${(mt+H-mb)/2})">Valeur</text>`;
+  pts.forEach(x => {
+    const lbl = x.p.nom.length > 26 ? x.p.nom.slice(0,25) + '…' : x.p.nom;
+    g += `<g class="pt" data-vprj="${x.p.id}" tabindex="0">
+      <title>${esc(x.p.nom)} — porteur ${esc(gName(x.p.porteur))} — valeur ${x.v}${x.manu?' (ajustée)':' (auto)'} — effort ${x.eff} — ${x.ng} groupement(s) impacté(s)</title>
+      <circle cx="${x.cx.toFixed(1)}" cy="${x.cy.toFixed(1)}" r="${x.r}" fill="${gColor(x.p.porteur)}" fill-opacity=".8" stroke="#fff" stroke-width="1.5"/>
+      <text x="${(x.cx + x.r + 3).toFixed(1)}" y="${(x.cy + 3).toFixed(1)}" font-size="10" fill="#2a2d33">${esc(lbl)}</text></g>`;
+  });
+  g += `</svg></div><p class="legend">Couleur : groupement porteur ; taille : nombre de groupements impactés. Survol : détail du projet.</p>`;
+  return g;
+}
+
+function veZones(d){
+  const zone = q => {
+    const l = d.planned.filter(x => x.qd===q).sort((a,b) => b.ratio - a.ratio);
+    return `<div class="qz ${QD[q].cls}" data-qd="${q}"><h4>${q}. ${QD[q].nom} <span class="nom">(${l.length})</span></h4><p class="qs">${QD[q].desc}</p>
+      ${l.map(x => `<div class="vcard" draggable="true" tabindex="0" data-vprj="${x.p.id}" style="--suit:${gColor(x.p.porteur)}">
+        <div class="vt">${esc(x.p.nom)} ${prioBadge(x.p)} ${ddBadge(x.p)}</div>
+        <div class="vm">${esc(gName(x.p.porteur))} — ${vPill(x)} — effort ${x.eff}</div></div>`).join('') || '<div class="empty">Aucun projet</div>'}</div>`;
+  };
+  return `<div class="qgrid">
+    <div></div><div class="qax">Effort faible</div><div class="qax">Effort élevé</div>
+    <div class="qay">Valeur élevée</div>${zone(1)}${zone(2)}
+    <div class="qay">Valeur faible</div>${zone(3)}${zone(4)}</div>
+    <p class="legend no-print">Glisser une carte vers le haut ou le bas ajuste sa valeur (mot de passe). L'effort est calculé à partir du P2A : pour changer de colonne, modifiez le planning.</p>`;
+}
+
+function veClassement(d){
+  const l = d.planned.slice().sort((a,b) => b.ratio - a.ratio || b.v - a.v);
+  const max = Math.max(...l.map(x => x.ratio));
+  const n = l.length;
+  // seuils de tiers (les rendements égaux ont la même couleur)
+  const r1 = l[Math.max(0, Math.ceil(n/3)-1)].ratio, r2 = l[Math.max(0, Math.ceil(2*n/3)-1)].ratio;
+  let h = `<table class="grid fixed"><colgroup><col style="width:5%"><col style="width:33%"><col style="width:12%"><col style="width:11%"><col style="width:8%"><col style="width:17%"><col style="width:14%"></colgroup>
+    <tr><th>Rang</th><th>Projet</th><th>Porteur</th><th>Valeur</th><th>Effort</th><th>Rendement (valeur ÷ effort)</th><th>Quadrant</th></tr>`;
+  l.forEach((x, i) => {
+    const col = x.ratio >= r1 ? '#2e7d4f' : x.ratio >= r2 ? '#e0a526' : '#b42318';
+    h += `<tr><td class="c"><b>${i+1}</b></td><td>${esc(x.p.nom)} ${prioBadge(x.p)} ${ddBadge(x.p)}</td>
+      <td>${porteurTxt(x.p)}</td><td>${vPill(x)}</td><td class="c">${x.eff}</td>
+      <td><div class="rend"><i style="width:${Math.round(70*x.ratio/max)}%; background:${col}"></i><span>${x.ratio.toFixed(2).replace('.',',')}</span></div></td>
+      <td>${qBadge(x.qd)}</td></tr>`;
+  });
+  return h + `</table><p class="legend">Vert : tiers le plus rentable ; orange : tiers intermédiaire ; rouge : tiers le moins rentable.</p>`;
+}
+
+function bindVE(){
+  $('#vG').onchange = e => { V.grp = +e.target.value; render(); };
+  document.querySelectorAll('[data-sub]').forEach(b => b.onclick = () => { V.sub = b.dataset.sub; render(); });
+  document.querySelectorAll('[data-vprj]').forEach(el => {
+    el.onclick = () => openValeur(+el.dataset.vprj);
+    el.onkeydown = e => { if(e.key==='Enter') openValeur(+el.dataset.vprj); };
+  });
+  document.querySelectorAll('.vcard').forEach(c => {
+    c.ondragstart = e => { dragging = true; e.dataTransfer.setData('text/plain', c.dataset.vprj); };
+    c.ondragend = () => { dragging = false; };
+  });
+  document.querySelectorAll('.qz').forEach(z => {
+    z.ondragover = e => { e.preventDefault(); z.classList.add('over'); };
+    z.ondragleave = () => z.classList.remove('over');
+    z.ondrop = e => { e.preventDefault(); z.classList.remove('over'); moveValeur(+e.dataTransfer.getData('text/plain'), +z.dataset.qd); };
+  });
+}
+
+async function setValeur(prjId, v){
+  if(!hasValeur){ alert('Ajoutez la colonne Valeur (numérique) dans la table Projet pour ajuster la valeur.'); return false; }
+  if(!await requireAdmin()) return false;
+  await act([['UpdateRecord', T.PRJ, prjId, {Valeur: v}]]);     // 0 = retour au calcul automatique
+  return true;
+}
+async function moveValeur(prjId, qd){
+  const x = veData().planned.find(y => y.p.id===prjId); if(!x || x.qd===qd) return;
+  const hiV = qd <= 2, hiE = qd % 2 === 0;
+  if(hiE !== x.hiE){ alert("L'effort est calculé à partir du P2A : pour changer de colonne, modifiez le planning du projet."); return; }
+  if(hiV === x.hiV) return;
+  await setValeur(prjId, hiV ? VAL_HAUTE : VAL_HAUTE - 1);
+}
+function openValeur(prjId){
+  const p = pObj(prjId); if(!p) return;
+  const cur = valeurOf(p), auto = autoVal(p);
+  const box = $('#vedit');
+  pwdOpen = true;
+  box.innerHTML = `<div class="backdrop" id="vBd"><div class="pwdbox" role="dialog" aria-label="Valeur du projet" style="width:min(440px,100%)">
+    <h2 style="margin:0 0 4px; font-size:15px">${esc(p.nom)}</h2>
+    <p class="nom" style="margin:0 0 8px">Porteur ${esc(gName(p.porteur))} ${prioBadge(p)} ${ddBadge(p)} — valeur actuelle V${cur.v} ${cur.manu ? '(ajustée)' : '(automatique)'}</p>
+    <b style="font-size:12px">Ajuster la valeur</b>
+    <div class="vbtns">${[1,2,3,4].map(v => `<button data-v="${v}" class="${cur.manu && cur.v===v ? 'on' : ''}">${v}</button>`).join('')}</div>
+    <button id="vAuto" ${cur.manu ? '' : 'disabled'}>Revenir au calcul automatique (V${auto})</button>
+    <p class="hint">1 = faible, 4 = très forte. Modification protégée par le mot de passe d'administration.</p>
+    <div class="row" style="justify-content:space-between; margin:10px 0 0"><button id="vFiche">Ouvrir la fiche projet</button><button id="vClose">Fermer</button></div>
+  </div></div>`;
+  const close = () => { pwdOpen = false; box.innerHTML = ''; };
+  $('#vBd').onclick = e => { if(e.target.id==='vBd') close(); };
+  $('#vClose').onclick = close;
+  $('#vFiche').onclick = () => { close(); openModal(prjId); };
+  box.querySelectorAll('.vbtns button').forEach(b => b.onclick = async () => { close(); await setValeur(prjId, +b.dataset.v); });
+  $('#vAuto').onclick = async () => { close(); await setValeur(prjId, 0); };
 }
 
 /* ================= Rafraîchissement automatique ================= */
