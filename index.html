@@ -911,6 +911,7 @@ function viewP2A(){
       <option value="prj" ${P.org==='prj'?'selected':''}>Une ligne par projet</option>
       <option value="pano" ${P.org==='pano'?'selected':''}>Panorama (tous les projets)</option></select></div>
     <div class="fg"><label>Jalons</label><select id="fJal">
+      <option value="none" ${P.jal==='none'?'selected':''}>Aucun</option>
       <option value="fin" ${P.jal==='fin'?'selected':''}>Fins de trimestre</option>
       <option value="ref" ${P.jal==='ref'?'selected':''}>+ échéances de référence</option></select></div>` : ''}
     <div class="fg"><label>Regroupement</label><select id="aMode">
@@ -1301,7 +1302,7 @@ function frPack(items){
 }
 function frTrack(items){
   const n = frPack(items);
-  const lh = FR_LANE + FR_MS + 4;
+  const lh = FR_LANE + (P.jal==='none' ? 0 : FR_MS) + 4;
   let h = `<div class="ftrack" style="height:${n*lh + 6}px">`;
   const y = frYear(), now = Date.now()/1000;
   if(now >= Date.UTC(y,0,1)/1000 && now < Date.UTC(y+1,0,1)/1000) h += `<div class="ftoday" style="left:${frPos(now)}%" title="Aujourd'hui"></div>`;
@@ -1310,6 +1311,7 @@ function frTrack(items){
     const color = it.color, bg = it.imp==='Fort' ? color : color + '66';
     h += `<div class="fbar ${it.imp} ${P.sel===it.key?'sel':''}" data-fk="${esc(it.key)}" role="button" tabindex="0"
       style="top:${top}px; left:${left}%; width:${width}%; background:${bg}" title="${esc(it.title)}">${esc(it.text)}${it.com?' 💬':''}</div>`;
+    if(P.jal==='none') return;
     const end = qEnd(it.to, y), mt = top + FR_LANE + 1;
     h += `<div class="fms" style="left:${frPos(end)}%; top:${mt}px"><b></b>${fmtDate(end).slice(0,5)}</div>`;
     if(P.jal==='ref') (it.refs||[]).forEach(t => {
@@ -1390,7 +1392,10 @@ function viewFresque(){
       .sort(byPrio).forEach(p => {
         const l = affs.filter(a => a.prj===p.id);
         if(!l.length) return;
-        const items = frItems(p, l, 'p', b => frLabelGrp(b.affs), gColor(p.porteur), null);
+        // une bulle par groupement impacté (couleur du groupement)
+        const items = [...new Set(l.map(a => a.grp))]
+          .sort((x,y) => gName(x).localeCompare(gName(y),'fr'))
+          .flatMap(g => frItems(p, l.filter(a => a.grp===g), 'p'+g, b => `${gName(g)} ${b.imp.toLowerCase()}`, gColor(g), g));
         all.push(...items);
         rows += `<div class="frow"><div class="flab"><i style="background:${gColor(p.porteur)}"></i><span>${esc(p.nom)} ${prioBadge(p)}
           <span class="nom">${esc(gName(p.porteur))}${p.pcol ? ' — ' + esc(cName(p.pcol)) : ''}</span></span></div>${frTrack(items)}</div>`;
@@ -1410,8 +1415,9 @@ function viewFresque(){
     <div class="meta">${titre}${filtre} — édité le ${today()}</div>
     <div style="overflow-x:auto"><div class="fresque">${frHeader()}${rows || '<p class="empty">Aucun projet ne correspond aux filtres.</p>'}</div></div>
     ${frDetail(all)}
-    <p class="legend">Barre pleine : impact fort ; claire : impact faible ; couleur : ${P.org==='grp' && P.mode==='porteur' ? 'groupement porteur' : 'groupement porteur du projet'}.
-      ◆ plein : fin de période au planning actuel${P.jal==='ref' ? ' ; ◇ : échéance de référence d\'une tâche replanifiée (en rouge si elle a été repoussée)' : ''}.
+    <p class="legend">Barre pleine : impact fort ; claire : impact faible ; couleur : ${P.org==='prj' ? 'groupement impacté (une bulle par groupement)' : P.org==='grp' && P.mode==='porteur' ? 'groupement porteur' : 'groupement porteur du projet'}.
+      Les mois sont indicatifs : une bulle couvre le trimestre entier.
+      ${P.jal==='none' ? '' : '◆ plein : fin de période au planning actuel' + (P.jal==='ref' ? ' ; ◇ : échéance de référence d’une tâche replanifiée (en rouge si elle a été repoussée)' : '') + '.'}
       Trait rouge : aujourd'hui. Clic sur une barre : détail et commentaires.</p></div>`;
 }
 
@@ -1419,7 +1425,7 @@ function viewFresque(){
 // Valeur mixte : colonne Projet.Valeur (1 à 4) si renseignée, sinon score automatique
 // (P1 = 3, P2 = 2, P3 = 1, Poursuite = 1, +1 si Roadmap DDSIS, plafonné à 4).
 // Effort : somme des points d'impact du projet (faible = 1, fort = 2), tous groupements et trimestres.
-const V = { sub:'nuage', grp:0 };
+const V = { sub:'nuage', grp:0, cap:0 };   // cap : capacité en points (0 = non définie)
 const VAL_AUTO = { P1:3, P2:2, P3:1, Poursuite:1 };
 const VAL_HAUTE = 3;                                   // valeur ≥ 3 : valeur élevée
 const QD = {
@@ -1452,7 +1458,7 @@ function veData(){
 
 function viewVE(){
   const d = veData();
-  const subs = [['nuage','Nuage de points'],['zones','Zones de cartes'],['classement','Classement par rendement']];
+  const subs = [['nuage','Nuage de points'],['zones','Zones de cartes'],['classement','Classement par rendement'],['pareto','Courbe de Pareto']];
   let h = `<div class="toolbar no-print">
     <div class="fg"><label>Groupement porteur</label><select id="vG">${opts(grps, V.grp, [0,'Tous'])}</select></div>
     ${pdFilters()}
@@ -1464,7 +1470,8 @@ function viewVE(){
   if(!d.planned.length) h += `<p class="empty">Aucun projet planifié ne correspond aux filtres.</p>`;
   else if(V.sub==='nuage') h += veNuage(d);
   else if(V.sub==='zones') h += veZones(d);
-  else h += veClassement(d);
+  else if(V.sub==='classement') h += veClassement(d);
+  else h += vePareto(d);
   if(d.unplanned.length) h += `<p class="legend">Non planifiés (effort nul, hors matrice) : ${d.unplanned.map(x => esc(x.p.nom)).join(' ; ')}</p>`;
   h += `<p class="legend">Valeur : colonne Valeur si renseignée, sinon P1 = 3, P2 = 2, P3 = 1, Poursuite = 1, +1 si Roadmap DDSIS (max 4) ; valeur élevée à partir de ${VAL_HAUTE}.
     Effort : somme des points d'impact (faible = 1, fort = 2) ; élevé au-delà de la médiane (${d.med}).
@@ -1546,7 +1553,64 @@ function veClassement(d){
   return h + `</table><p class="legend">Vert : tiers le plus rentable ; orange : tiers intermédiaire ; rouge : tiers le moins rentable.</p>`;
 }
 
+function vePareto(d){
+  const l = d.planned.slice().sort((a,b) => b.ratio - a.ratio || b.v - a.v);
+  const totE = l.reduce((t,x) => t + x.eff, 0), totV = l.reduce((t,x) => t + x.v, 0);
+  let ce = 0, cv = 0;
+  const pts = l.map((x,i) => { ce += x.eff; cv += x.v; return {...x, rank:i+1, ce, cv, pe:ce/totE*100, pv:cv/totV*100}; });
+  const cap = V.cap > 0 ? V.cap : 0;
+  const W = 900, H = 420, ml = 55, mr = 35, mt = 25, mb = 45;
+  const X = p => ml + p/100*(W-ml-mr), Y = p => H-mb - p/100*(H-mt-mb);
+  let g = `<div class="toolbar no-print" style="margin:0 0 8px">
+      <div class="fg"><label>Capacité disponible (points d'effort)</label>
+      <input type="number" id="vCap" min="0" step="1" value="${cap || ''}" placeholder="Total : ${totE}" style="width:170px; font:inherit; padding:6px 9px; border-radius:6px; border:1px solid #d3cdc3"></div>
+      <span class="hint" style="margin:0 0 6px">Facultatif : trace la limite de capacité et marque les projets au-delà.</span></div>
+    <div style="overflow-x:auto"><svg class="scatter" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Courbe de Pareto : valeur cumulée en fonction de l'effort cumulé">`;
+  [0,25,50,75,100].forEach(p => {
+    g += `<line x1="${ml}" y1="${Y(p)}" x2="${W-mr}" y2="${Y(p)}" stroke="#ece8e1"/>
+      <text x="${ml-8}" y="${Y(p)+3}" font-size="10" fill="#6f6a63" text-anchor="end">${p} %</text>
+      <text x="${X(p)}" y="${H-mb+14}" font-size="10" fill="#6f6a63" text-anchor="middle">${p} %</text>`;
+  });
+  g += `<line x1="${ml}" y1="${H-mb}" x2="${W-mr}" y2="${H-mb}" stroke="#9a938a"/>
+    <line x1="${ml}" y1="${mt}" x2="${ml}" y2="${H-mb}" stroke="#9a938a"/>
+    <line x1="${X(0)}" y1="${Y(0)}" x2="${X(100)}" y2="${Y(100)}" stroke="#b9b2a6" stroke-dasharray="4 4"/>
+    <text x="${(ml+W-mr)/2}" y="${H-8}" font-size="11" fill="#6f6a63" text-anchor="middle">Effort cumulé (${totE} pts au total)</text>
+    <text x="16" y="${(mt+H-mb)/2}" font-size="11" fill="#6f6a63" text-anchor="middle" transform="rotate(-90 16 ${(mt+H-mb)/2})">Valeur cumulée</text>`;
+  // zone hors capacité
+  if(cap && cap < totE){
+    const xc = X(cap/totE*100);
+    g += `<rect x="${xc}" y="${mt}" width="${W-mr-xc}" height="${H-mb-mt}" fill="#f6e2e0" opacity=".6"/>
+      <line x1="${xc}" y1="${mt}" x2="${xc}" y2="${H-mb}" stroke="#b42318" stroke-width="2"/>
+      <text x="${xc+6}" y="${mt+14}" font-size="11" font-weight="600" fill="#b42318">Hors capacité</text>`;
+  }
+  g += `<polyline fill="none" stroke="#2f5d8a" stroke-width="2.5" points="${X(0)},${Y(0)} ${pts.map(p => `${X(p.pe).toFixed(1)},${Y(p.pv).toFixed(1)}`).join(' ')}"/>`;
+  pts.forEach(p => {
+    const out = cap && p.ce > cap;
+    g += `<g class="pt" data-vprj="${p.p.id}" tabindex="0"><title>${p.rank}. ${esc(p.p.nom)} — valeur ${p.v}, effort ${p.eff} — cumul ${Math.round(p.pe)} % de l'effort, ${Math.round(p.pv)} % de la valeur${out ? ' — hors capacité' : ''}</title>
+      <circle cx="${X(p.pe).toFixed(1)}" cy="${Y(p.pv).toFixed(1)}" r="9" fill="${out ? '#fff' : gColor(p.p.porteur)}" stroke="${out ? '#b42318' : '#fff'}" stroke-width="${out ? 2 : 1.5}" ${out ? 'stroke-dasharray="3 2"' : ''}/>
+      <text x="${X(p.pe).toFixed(1)}" y="${(Y(p.pv)+3.5).toFixed(1)}" font-size="9" font-weight="600" fill="${out ? '#b42318' : '#fff'}" text-anchor="middle">${p.rank}</text></g>`;
+  });
+  // repère : 80 % de la valeur
+  const k = pts.find(p => p.pv >= 80);
+  if(k) g += `<line x1="${X(k.pe)}" y1="${Y(k.pv)}" x2="${X(k.pe)}" y2="${H-mb}" stroke="#2f5d8a" stroke-dasharray="2 3"/>
+    <text x="${X(k.pe)+8}" y="${Y(k.pv)+16}" font-size="11" fill="#2a2d33">${Math.round(k.pv)} % de la valeur avec ${Math.round(k.pe)} % de l'effort</text>`;
+  g += `</svg></div>`;
+  // tableau
+  const inCap = cap ? pts.filter(p => p.ce <= cap) : pts;
+  const vIn = inCap.reduce((t,p) => t + p.v, 0);
+  if(cap) g += `<p style="margin:6px 0"><b>Avec ${cap} points de capacité :</b> ${inCap.length} projet(s) sur ${pts.length}, soit ${Math.round(vIn/totV*100)} % de la valeur totale.</p>`;
+  g += `<table class="grid fixed"><colgroup><col style="width:6%"><col style="width:38%"><col style="width:10%"><col style="width:9%"><col style="width:13%"><col style="width:12%"><col style="width:12%"></colgroup>
+    <tr><th>Rang</th><th>Projet</th><th>Valeur</th><th>Effort</th><th>Effort cumulé</th><th>Valeur cumulée</th><th>Capacité</th></tr>
+    ${pts.map(p => `<tr><td class="c"><b>${p.rank}</b></td><td>${esc(p.p.nom)} ${prioBadge(p.p)} ${ddBadge(p.p)}<div class="nom">${esc(gName(p.p.porteur))}</div></td>
+      <td>${vPill(p)}</td><td class="c">${p.eff}</td><td class="c">${p.ce} (${Math.round(p.pe)} %)</td><td class="c">${Math.round(p.pv)} %</td>
+      <td>${!cap ? '—' : p.ce <= cap ? '<span class="qb q1">Dans la capacité</span>' : '<span class="qb q4">Hors capacité</span>'}</td></tr>`).join('')}</table>
+    <p class="legend">Projets classés du meilleur au moins bon rendement (valeur ÷ effort). Pointillés gris : progression proportionnelle.
+      Plus la courbe est bombée, plus la valeur est concentrée sur peu d'effort. Numéro de point = rang ; couleur = porteur ; cercle blanc à contour rouge pointillé = hors capacité.</p>`;
+  return g;
+}
+
 function bindVE(){
+  if($('#vCap')) $('#vCap').onchange = e => { V.cap = Math.max(0, Math.round(+e.target.value || 0)); render(); };
   $('#vG').onchange = e => { V.grp = +e.target.value; render(); };
   document.querySelectorAll('[data-sub]').forEach(b => b.onclick = () => { V.sub = b.dataset.sub; render(); });
   document.querySelectorAll('[data-vprj]').forEach(el => {
