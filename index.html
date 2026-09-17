@@ -185,6 +185,24 @@
   .vbtns button.on{background:var(--table); color:#fff; border-color:var(--table);}
   svg.scatter text{font-family:inherit;}
   svg.scatter .pt{cursor:pointer;} svg.scatter .pt:hover circle{stroke:var(--ink); stroke-width:2;}
+  .fresque{min-width:760px; padding-right:22px;}
+  .fhead,.frow{display:grid; grid-template-columns:150px 1fr;}
+  .fq{display:grid; grid-template-columns:repeat(4,1fr);} .fq div{text-align:center; font-size:11px; font-weight:600; background:var(--soft); padding:4px 0; border-left:1px solid var(--line);}
+  .fm{display:grid; grid-template-columns:repeat(12,1fr);} .fm div{text-align:center; font-size:10px; color:var(--muted); padding:2px 0; border-left:1px dashed var(--line);}
+  .frow{border-top:1px solid var(--line);}
+  .flab{font-size:12px; font-weight:600; padding:6px 8px 6px 0; display:flex; gap:6px; align-items:flex-start; line-height:1.25;}
+  .flab i{flex:0 0 9px; height:9px; border-radius:2px; margin-top:3px;}
+  .flab .nom{font-weight:400; display:block;}
+  .ftrack{position:relative; background:repeating-linear-gradient(90deg,transparent 0,transparent calc(25% - 1px),var(--line) calc(25% - 1px),var(--line) 25%);}
+  .fbar{position:absolute; height:18px; border-radius:9px; font-size:10px; line-height:18px; padding:0 8px; white-space:nowrap; overflow:hidden;
+        text-overflow:ellipsis; color:#fff; cursor:pointer; box-sizing:border-box;}
+  .fbar.Faible{color:var(--ink);} .fbar.sel{outline:2px solid var(--ink); outline-offset:1px;}
+  .fms{position:absolute; font-size:9px; color:var(--muted); transform:translateX(-50%); white-space:nowrap; text-align:center; line-height:1;}
+  .fms b{display:block; width:8px; height:8px; margin:0 auto 1px; transform:rotate(45deg); background:var(--red);}
+  .fms.ref b{background:#fff; border:1.5px solid #6f6a63;} .fms.ref{color:#6f6a63;} .fms.late{color:var(--red); font-weight:600;}
+  .ftoday{position:absolute; top:0; bottom:0; width:2px; background:var(--red); opacity:.7;}
+  .fdet{background:#fff8e1; border:1px solid #f0d58a; border-radius:8px; padding:8px 10px; margin:10px 0 0; font-size:12px;}
+  .fdet h4{margin:0 0 4px; font-size:13px;}
   @media (max-width:900px){ .board{grid-template-columns:1fr 1fr;} }
 </style>
 </head>
@@ -240,7 +258,7 @@ let loadSeq = 0;
 let lastSig = '';                                   // signature des données affichées
 let dragging = false;
 let comEdit = null;                                 // id d'affectation dont le commentaire est en cours d'édition
-const P = { mode:'porteur', g:'all', open:new Set() }; // open : commentaires dépliés              // options P2A
+const P = { mode:'porteur', g:'all', open:new Set(), sub:'tableau', org:'grp', jal:'fin', sel:'' }; // open : commentaires dépliés              // options P2A
 const S = { type:'prio', val:'all', open:new Set() }; // open : commentaires dépliés               // état priorité / DDSIS
 
 /* ================= Utilitaires ================= */
@@ -883,7 +901,18 @@ function sheetP2A(g){
   return h;
 }
 function viewP2A(){
-  let h = `<div class="toolbar no-print">
+  const fr = P.sub === 'fresque';
+  let h = `<div class="subtabs no-print">
+    <button class="subtab ${fr?'':'on'}" data-psub="tableau">Tableau</button>
+    <button class="subtab ${fr?'on':''}" data-psub="fresque">Fresque</button></div>
+    <div class="toolbar no-print">
+    ${fr ? `<div class="fg"><label>Organisation</label><select id="fOrg">
+      <option value="grp" ${P.org==='grp'?'selected':''}>Une ligne par groupement</option>
+      <option value="prj" ${P.org==='prj'?'selected':''}>Une ligne par projet</option>
+      <option value="pano" ${P.org==='pano'?'selected':''}>Panorama (tous les projets)</option></select></div>
+    <div class="fg"><label>Jalons</label><select id="fJal">
+      <option value="fin" ${P.jal==='fin'?'selected':''}>Fins de trimestre</option>
+      <option value="ref" ${P.jal==='ref'?'selected':''}>+ échéances de référence</option></select></div>` : ''}
     <div class="fg"><label>Regroupement</label><select id="aMode">
       <option value="porteur" ${P.mode==='porteur'?'selected':''}>Par groupement porteur</option>
       <option value="impacte" ${P.mode==='impacte'?'selected':''}>Par groupement impacté</option></select></div>
@@ -891,10 +920,22 @@ function viewP2A(){
     ${pdFilters()}
     <button class="primary" onclick="window.print()">Imprimer / PDF</button>
     <button class="admin" id="aSync" title="Réservé à l'administration">🔒 Générer / mettre à jour les actions</button></div>`;
-  const sel = P.g==='all' ? grps : grps.filter(g=>g.id==P.g);
-  const body = sel.map(sheetP2A).join('');
-  h += body || `<p class="empty">Aucun projet ne correspond aux filtres.</p>`;
+  if(fr) h += viewFresque();
+  else {
+    const sel = P.g==='all' ? grps : grps.filter(g=>g.id==P.g);
+    const body = sel.map(sheetP2A).join('');
+    h += body || `<p class="empty">Aucun projet ne correspond aux filtres.</p>`;
+  }
   setTimeout(() => {
+    document.querySelectorAll('[data-psub]').forEach(b => b.onclick = () => { P.sub = b.dataset.psub; render(); });
+    if($('#fOrg')) $('#fOrg').onchange = e => { P.org = e.target.value; P.sel = ''; render(); };
+    if($('#fJal')) $('#fJal').onchange = e => { P.jal = e.target.value; render(); };
+    document.querySelectorAll('.fbar').forEach(b => {
+      const tg = () => { P.sel = P.sel === b.dataset.fk ? '' : b.dataset.fk; render(); };
+      b.onclick = tg; b.onkeydown = e => { if(e.key==='Enter'||e.key===' '){ e.preventDefault(); tg(); } };
+    });
+    if($('#fsClose')) $('#fsClose').onclick = () => { P.sel = ''; render(); };
+    if($('#fsFiche')) $('#fsFiche').onclick = () => openModal(+$('#fsFiche').dataset.prj);
     $('#aMode').onchange = e => { P.mode = e.target.value; render(); };
     $('#aSync').onclick = runSync;
     document.querySelectorAll('.gcb').forEach(b => {
@@ -1222,6 +1263,156 @@ function viewBilan(){
     if($('#bPwd')) $('#bPwd').onclick = changePwd;
   });
   return h;
+}
+
+/* ================= P2A : fresque chronologique ================= */
+const FR_LANE = 22, FR_MS = 16;                        // hauteur d'une barre / d'une étiquette de jalon
+function frBlocks(list){
+  // list : affectations -> blocs de trimestres consécutifs avec impact max
+  const byQ = Q.map(q => list.filter(a => a.q===q));
+  const blocks = [];
+  byQ.forEach((l, qi) => {
+    if(!l.length) return;
+    const imp = l.some(a => a.imp==='Fort') ? 'Fort' : 'Faible';
+    const b = blocks[blocks.length-1];
+    if(b && b.to===qi-1){ b.to = qi; if(imp==='Fort') b.imp = 'Fort'; b.affs.push(...l); }
+    else blocks.push({from:qi, to:qi, imp, affs:[...l]});
+  });
+  blocks.forEach(b => b.label = b.from===b.to ? QS[b.from] : QS[b.from]+'-'+QS[b.to]);
+  return blocks;
+}
+// Échéances de référence des tâches : projet (et groupement si précisé)
+function frRefs(prjId, grpId){
+  if(!hasRef) return [];
+  const acts = actions.filter(a => a.prj===prjId && (!grpId || a.grp===grpId)).map(a => a.id);
+  return taches.filter(t => acts.includes(t.act) && t.refFin);
+}
+const frYear = () => qYear(Q[0]);
+const frPos = ts => { const y = frYear(), a = Date.UTC(y,0,1)/1000, b = Date.UTC(y+1,0,1)/1000; return Math.max(0, Math.min(100, (ts-a)/(b-a)*100)); };
+// Répartit les éléments sur des sous-lignes pour éviter les chevauchements
+function frPack(items){
+  const lanes = [];
+  items.sort((x,y) => x.from - y.from || y.to - x.to).forEach(it => {
+    let i = lanes.findIndex(end => end < it.from);
+    if(i < 0){ i = lanes.length; lanes.push(-1); }
+    lanes[i] = it.to; it.lane = i;
+  });
+  return Math.max(1, lanes.length);
+}
+function frTrack(items){
+  const n = frPack(items);
+  const lh = FR_LANE + FR_MS + 4;
+  let h = `<div class="ftrack" style="height:${n*lh + 6}px">`;
+  const y = frYear(), now = Date.now()/1000;
+  if(now >= Date.UTC(y,0,1)/1000 && now < Date.UTC(y+1,0,1)/1000) h += `<div class="ftoday" style="left:${frPos(now)}%" title="Aujourd'hui"></div>`;
+  items.forEach(it => {
+    const top = 4 + it.lane*lh, left = it.from*25 + .4, width = (it.to-it.from+1)*25 - .8;
+    const color = it.color, bg = it.imp==='Fort' ? color : color + '66';
+    h += `<div class="fbar ${it.imp} ${P.sel===it.key?'sel':''}" data-fk="${esc(it.key)}" role="button" tabindex="0"
+      style="top:${top}px; left:${left}%; width:${width}%; background:${bg}" title="${esc(it.title)}">${esc(it.text)}${it.com?' 💬':''}</div>`;
+    const end = qEnd(it.to, y), mt = top + FR_LANE + 1;
+    h += `<div class="fms" style="left:${frPos(end)}%; top:${mt}px"><b></b>${fmtDate(end).slice(0,5)}</div>`;
+    if(P.jal==='ref') (it.refs||[]).forEach(t => {
+      // jalon de référence affiché seulement si la tâche a été replanifiée
+      if(!t.fin || t.refFin === t.fin) return;
+      const late = t.fin > t.refFin;
+      h += `<div class="fms ref ${late?'late':''}" style="left:${frPos(t.refFin)}%; top:${mt}px"
+        title="Échéance de référence ${fmtDate(t.refFin)} — échéance actuelle ${fmtDate(t.fin)}${late?' (retard)':' (avance)'}"><b></b>réf. ${fmtDate(t.refFin).slice(0,5)}</div>`;
+    });
+  });
+  return h + `</div>`;
+}
+const frLabelGrp = list => {
+  const by = {};
+  list.forEach(a => { if(!by[a.grp] || a.imp==='Fort') by[a.grp] = a.imp; });
+  return Object.entries(by).sort(([x],[y]) => gName(+x).localeCompare(gName(+y),'fr'))
+    .map(([g,imp]) => `${gName(+g)} ${imp.toLowerCase()}`).join(', ');
+};
+// Construit les barres d'un projet (affectations déjà restreintes)
+function frItems(p, list, rowKey, textFn, color, refGrp){
+  const refs = P.jal==='ref' ? frRefs(p.id, refGrp) : [];
+  return frBlocks(list).map(b => ({
+    from:b.from, to:b.to, imp:b.imp, color,
+    key:`${rowKey}|${p.id}|${b.label}`, prj:p.id, block:b,
+    text:textFn(b), com:b.affs.some(a=>a.com),
+    title:`${p.nom} — ${b.label} — ${frLabelGrp(b.affs)}`,
+    refs: refs.filter(t => { const r = blockRange(t.periode); return !r || (r[0]-1 <= b.to && r[1]-1 >= b.from); })
+  }));
+}
+function frDetail(items){
+  const it = items.find(x => x.key===P.sel);
+  if(!it) return '';
+  const p = pObj(it.prj), b = it.block;
+  const by = {};
+  b.affs.forEach(a => {
+    const k = by[a.grp] = by[a.grp] || {imp:'Faible', noms:[], coms:[]};
+    if(a.imp==='Fort') k.imp = 'Fort';
+    if(a.col) k.noms.push(cName(a.col));
+    if(a.com) k.coms.push(`${QS[Q.indexOf(a.q)]} — ${a.com}`);
+  });
+  const lignes = Object.entries(by).sort(([x],[y]) => gName(+x).localeCompare(gName(+y),'fr')).map(([g,k]) =>
+    `<div style="margin:3px 0"><span class="gchip">${esc(gName(+g))} : <b class="${k.imp}">${k.imp}</b>${k.noms.length?` <span class="nm">(${esc([...new Set(k.noms)].join(', '))})</span>`:''}</span>
+     ${k.coms.map(c => `<div class="com">💬 ${esc(c)}</div>`).join('')}</div>`).join('');
+  const refs = (it.refs||[]).map(t => `réf. ${fmtDate(t.refFin)}${t.fin && t.fin!==t.refFin ? ` → actuelle ${fmtDate(t.fin)}` : ''}`);
+  return `<div class="fdet"><h4>${esc(p.nom)} ${prioBadge(p)} ${ddBadge(p)}</h4>
+    <div class="nom">Porteur : ${porteurTxt(p)} — ${b.label} (${fmtDate(qStart(b.from, frYear()))} → ${fmtDate(qEnd(b.to, frYear()))})${refs.length ? ' — ' + esc(refs.join(' ; ')) : ''}</div>
+    ${lignes}
+    <div class="row no-print" style="margin:6px 0 0"><button id="fsFiche" data-prj="${p.id}">Ouvrir la fiche projet</button><button id="fsClose">Fermer</button></div></div>`;
+}
+function frHeader(){
+  const mois = ['janv.','févr.','mars','avr.','mai','juin','juil.','août','sept.','oct.','nov.','déc.'];
+  return `<div class="fhead"><div></div><div class="fq">${QS.map(s => `<div>${s} ${frYear()}</div>`).join('')}</div></div>
+    <div class="fhead"><div></div><div class="fm">${mois.map(m => `<div>${m}</div>`).join('')}</div></div>`;
+}
+function viewFresque(){
+  const selG = P.g==='all' ? null : P.g;
+  const all = [];
+  let rows = '';
+  const titre = {grp:'Une ligne par groupement', prj:'Une ligne par projet', pano:'Panorama'}[P.org];
+  if(P.org === 'grp'){
+    (selG ? grps.filter(g=>g.id===selG) : grps).forEach(g => {
+      let items = [];
+      if(P.mode === 'porteur'){
+        projets.filter(p => p.porteur===g.id && matchPD(p)).forEach(p =>
+          items.push(...frItems(p, affs.filter(a=>a.prj===p.id), 'g'+g.id, () => p.nom, gColor(g.id), null)));
+      } else {
+        projets.filter(p => matchPD(p)).forEach(p => {
+          const l = affs.filter(a => a.prj===p.id && a.grp===g.id);
+          if(l.length) items.push(...frItems(p, l, 'g'+g.id, () => p.nom, gColor(p.porteur), g.id));
+        });
+      }
+      if(!items.length) return;
+      all.push(...items);
+      rows += `<div class="frow"><div class="flab"><i style="background:${gColor(g.id)}"></i><span>${esc(g.nom)}<span class="nom">${items.length} barre(s)</span></span></div>${frTrack(items)}</div>`;
+    });
+  } else if(P.org === 'prj'){
+    projets.filter(p => matchPD(p) && (!selG || (P.mode==='porteur' ? p.porteur===selG : affs.some(a=>a.prj===p.id && a.grp===selG))))
+      .sort(byPrio).forEach(p => {
+        const l = affs.filter(a => a.prj===p.id);
+        if(!l.length) return;
+        const items = frItems(p, l, 'p', b => frLabelGrp(b.affs), gColor(p.porteur), null);
+        all.push(...items);
+        rows += `<div class="frow"><div class="flab"><i style="background:${gColor(p.porteur)}"></i><span>${esc(p.nom)} ${prioBadge(p)}
+          <span class="nom">${esc(gName(p.porteur))}${p.pcol ? ' — ' + esc(cName(p.pcol)) : ''}</span></span></div>${frTrack(items)}</div>`;
+      });
+  } else {
+    const items = [];
+    projets.filter(p => matchPD(p) && (!selG || (P.mode==='porteur' ? p.porteur===selG : affs.some(a=>a.prj===p.id && a.grp===selG))))
+      .sort(byPrio).forEach(p => {
+        const l = affs.filter(a => a.prj===p.id);
+        if(l.length) items.push(...frItems(p, l, 'pano', () => p.nom, gColor(p.porteur), null));
+      });
+    all.push(...items);
+    if(items.length) rows = `<div class="frow"><div class="flab"><span>Tous les projets<span class="nom">${new Set(items.map(x=>x.prj)).size} projet(s)</span></span></div>${frTrack(items)}</div>`;
+  }
+  const filtre = selG ? ` — ${P.mode==='porteur' ? 'porteur' : 'impacté'} ${esc(gName(selG))}` : (P.org==='grp' ? ` — ${P.mode==='porteur' ? 'groupements porteurs' : 'groupements impactés'}` : '');
+  return `<div class="sheet"><h2>P2A 2027 — fresque chronologique</h2>
+    <div class="meta">${titre}${filtre} — édité le ${today()}</div>
+    <div style="overflow-x:auto"><div class="fresque">${frHeader()}${rows || '<p class="empty">Aucun projet ne correspond aux filtres.</p>'}</div></div>
+    ${frDetail(all)}
+    <p class="legend">Barre pleine : impact fort ; claire : impact faible ; couleur : ${P.org==='grp' && P.mode==='porteur' ? 'groupement porteur' : 'groupement porteur du projet'}.
+      ◆ plein : fin de période au planning actuel${P.jal==='ref' ? ' ; ◇ : échéance de référence d\'une tâche replanifiée (en rouge si elle a été repoussée)' : ''}.
+      Trait rouge : aujourd'hui. Clic sur une barre : détail et commentaires.</p></div>`;
 }
 
 /* ================= Valeur / effort ================= */
