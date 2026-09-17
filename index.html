@@ -108,7 +108,7 @@
   @media print{
     @page{size:A4 landscape; margin:10mm;}
     body{background:#fff;}
-    header,.no-print,.status{display:none !important;}
+    header,.no-print,.status,#smov{display:none !important;}
     main{padding:0;}
     .sheet{border:0; padding:0; margin:0; page-break-after:always;}
     .sheet:last-child{page-break-after:auto;}
@@ -215,6 +215,21 @@
   .ftoday{position:absolute; top:0; bottom:0; width:2px; background:var(--red); opacity:.7;}
   .fdet{background:#fff8e1; border:1px solid #f0d58a; border-radius:8px; padding:8px 10px; margin:10px 0 0; font-size:12px;}
   .fdet h4{margin:0 0 4px; font-size:13px;}
+  #smbar{background:var(--red); color:#fff; padding:6px 14px; font-size:13px; display:flex; gap:14px; align-items:center; flex-wrap:wrap;}
+  #smbar b{font-size:15px;} #smbar .cd{font-variant-numeric:tabular-nums; font-size:18px; font-weight:700;}
+  #smbar button{padding:3px 9px; font-size:12px;}
+  .smov{position:fixed; inset:0; background:rgba(20,22,26,.72); display:flex; align-items:center; justify-content:center; z-index:50; padding:16px;}
+  .smbox{background:#fff; border-radius:14px; padding:28px 32px; width:min(620px,100%); text-align:center; border-top:8px solid var(--red);}
+  .smbox .tr{display:inline-block; font-size:13px; padding:3px 12px; border-radius:12px; background:var(--red-bg); color:var(--red); font-weight:600;}
+  .smbox h2{font-size:34px; margin:14px 0 6px;} .smbox p{font-size:20px; margin:4px 0; color:var(--muted);}
+  .smbox p b{color:var(--ink);} .smbox .big{font-size:26px; color:var(--ink); margin:12px 0;}
+  .smbox .cd{font-size:22px; font-weight:700; font-variant-numeric:tabular-nums; margin-top:12px; color:var(--table);}
+  .smgrid td,.smgrid th{font-size:11px; padding:3px 5px; text-align:center; white-space:nowrap;}
+  .smgrid td.v{background:#e3ecf7; color:#244a73;} .smgrid td.h{background:#e3f3ea; color:#1f5e3d;}
+  .smgrid td.bad{background:var(--red-bg); color:var(--red); font-weight:700;} .smgrid td.dup{box-shadow:inset 0 0 0 2px #e0a526;}
+  .smgrid tr.cur td,.smgrid tr.cur th{outline:2px solid var(--red); outline-offset:-2px;}
+  .pair{display:inline-flex; gap:4px; align-items:center; background:var(--soft); border-radius:6px; padding:2px 6px; margin:2px; font-size:12px;}
+  .pair button{padding:0 5px; font-size:11px;}
   @media (max-width:900px){ .board{grid-template-columns:1fr 1fr;} }
 </style>
 </head>
@@ -231,16 +246,19 @@
     <button class="tab" data-v="p2a">P2A 2027</button>
     <button class="tab" data-v="ve">Valeur / effort</button>
     <button class="tab" data-v="bilan">Bilan 2027</button>
+    <button class="tab" data-v="sm">Speed meeting</button>
   </nav>
   <div class="hright">
     <button id="lock" title="Mode administration (mot de passe)">🔒 Administration</button>
     <button id="refresh" title="Recharger les données">Actualiser</button>
   </div>
 </header>
+<div id="smbar" class="no-print" style="display:none"></div>
 <div id="status" class="status">Connexion à Grist…</div>
 <main id="app"></main>
 <div id="modal"></div>
 <div id="pwd"></div>
+<div id="smov"></div>
 <div id="vedit"></div>
 
 <script>
@@ -353,12 +371,12 @@ async function loadAll(auto){
   const seq = ++loadSeq;
   try{
     const facultative = t => grist.docApi.fetchTable(t).catch(() => null);   // Commentaires, Actions, Taches
-    const [g,c,p,a,jc,ta,tt] = await Promise.all([
+    const [g,c,p,a,jc,ta,tt,smp,smr] = await Promise.all([
       ...[T.GRP,T.COL,T.PRJ,T.AFF].map(t => grist.docApi.fetchTable(t)),
-      facultative(T_COM), facultative(T_ACT), facultative(T_TAC)]);
+      facultative(T_COM), facultative(T_ACT), facultative(T_TAC), facultative(T_SMP), facultative(T_SMR)]);
     if(seq !== loadSeq) return;
     if(auto && pending) return;                        // écriture en cours : on attend son rechargement
-    const sig = JSON.stringify([g,c,p,a,jc,ta,tt]);
+    const sig = JSON.stringify([g,c,p,a,jc,ta,tt,smp,smr]);
     if(auto && sig === lastSig) return;               // rien n'a changé : pas de re-rendu
     lastSig = sig;
     grps = g.id.map((id,i)=>({id, nom:g.Groupement[i]||'(sans nom)'}));
@@ -385,6 +403,7 @@ async function loadAll(auto){
     });
     hasCom = hasCom || hasJournal;
     loadActionsTaches(ta, tt);
+    loadSM(smp, smr);
     reindex();
     setStatus(hasCollab ? '' : "Colonne Affectation.Collaborateur absente : la distinction par collaborateur est désactivée.");
     render();
@@ -432,6 +451,7 @@ function render(){
   else if(view==='prio') app.innerHTML = viewEtatPrio();
   else if(view==='p2a') app.innerHTML = viewP2A();
   else if(view==='ve') app.innerHTML = viewVE();
+  else if(view==='sm') app.innerHTML = viewSM();
   else app.innerHTML = viewBilan();
   if(view==='kanban'){
     bindKanban(); fitBoard();
@@ -1820,6 +1840,295 @@ function openValeur(prjId){
   $('#vFiche').onclick = () => { close(); openModal(prjId); };
   box.querySelectorAll('.vbtns button').forEach(b => b.onclick = async () => { close(); await setValeur(prjId, +b.dataset.v); });
   $('#vAuto').onclick = async () => { close(); await setValeur(prjId, 0); };
+}
+
+/* ================= Speed meeting ================= */
+// Tables : SM_Participants (Nom, Groupement), SM_Rotations (Tour, Hote, Visiteur),
+// SM_Seance (une ligne : Tour_actif, Debut_tour, Duree_min, Etat, Message)
+const T_SMP = 'SM_Participants', T_SMR = 'SM_Rotations', T_SMS = 'SM_Seance';
+const SM_LIBRE = 'Tour libre — pause café';
+const SM_POLL_MS = 3000;
+let smParts = [], smRots = [], hasSM = false, smSeance = null, smSeenInit = false;
+const SMU = { tour:1, duree:20, excl:true };           // état de l'écran d'administration
+// Mémoire du poste (localStorage), avec repli en mémoire si le navigateur le bloque
+const MEM = {};
+const lsGet = k => { try{ const v = localStorage.getItem(k); if(v !== null) return v; }catch(e){} return k in MEM ? MEM[k] : null; };
+const lsSet = (k, v) => { MEM[k] = v; try{ localStorage.setItem(k, v); }catch(e){} };
+const smMe = () => +(lsGet('sm_me') || 0);
+const smName = id => (smParts.find(x => x.id===id) || {}).nom || '—';
+function loadSM(smp, smr){
+  hasSM = !!(smp && 'Nom' in smp && smr && ['Tour','Hote','Visiteur'].every(c => c in smr));
+  smParts = hasSM ? smp.id.map((id,i) => ({id, nom:smp.Nom[i] || '(sans nom)', grp: smp.Groupement ? smp.Groupement[i] : 0})) : [];
+  smRots = hasSM ? smr.id.map((id,i) => ({id, tour:+smr.Tour[i] || 0, hote:smr.Hote[i], vis:smr.Visiteur[i]})).filter(r => r.tour > 0) : [];
+}
+const smTours = () => Math.max(0, ...smRots.map(r => r.tour));
+function smRole(me, tour){
+  const r = smRots.find(x => x.tour===tour && (x.hote===me || x.vis===me));
+  if(!r) return {type:'libre'};
+  return r.hote===me ? {type:'hote', autre:r.vis, r} : {type:'vis', autre:r.hote, r};
+}
+
+// ---- son (carillon) ----
+let smAudio = null;
+function smChime(){
+  try{
+    if(!smAudio) return;
+    if(smAudio.state === 'suspended') smAudio.resume();
+    [659, 784, 1047].forEach((f, i) => {
+      const o = smAudio.createOscillator(), g = smAudio.createGain(), t = smAudio.currentTime + i*0.22;
+      o.type = 'sine'; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.3, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.2);
+      o.connect(g).connect(smAudio.destination); o.start(t); o.stop(t + 1.3);
+    });
+  }catch(e){ console.warn(e); }
+}
+function smEnableSound(){
+  try{ smAudio = smAudio || new (window.AudioContext || window.webkitAudioContext)(); smAudio.resume(); smChime(); }catch(e){}
+  render();
+}
+
+// ---- télécommande : lecture périodique ----
+function smRemaining(){
+  const S2 = smSeance; if(!S2) return 0;
+  if(S2.etat !== 'En cours' || !S2.debut) return Math.round((S2.duree||0)*60);
+  return Math.max(0, Math.round(S2.debut + (S2.duree||0)*60 - Date.now()/1000));
+}
+const mmss = sec => String(Math.floor(sec/60)).padStart(2,'0') + ':' + String(sec%60).padStart(2,'0');
+async function pollSeance(){
+  if(!hasSM) { smSeance = null; smBar(); smSeenInit = !!loadSeqDone(); return; }
+  let t = null;
+  try{ t = await grist.docApi.fetchTable(T_SMS); }catch(e){ t = null; }
+  if(!t || !t.id.length){ smSeance = null; smBar(); smSeenInit = true; return; }
+  const n = smSeance;
+  smSeance = { id:t.id[0], tour:+(t.Tour_actif ? t.Tour_actif[0] : 0) || 0, debut: t.Debut_tour ? t.Debut_tour[0] : null,
+               duree: t.Duree_min ? +t.Duree_min[0] || 0 : 20, etat: t.Etat ? (t.Etat[0] || 'Préparation') : 'Préparation',
+               msg: t.Message ? (t.Message[0] || '') : '' };
+  smBar();
+  // Affichage automatique quand le tour, l'état ou le message change
+  const key = `${smSeance.tour}|${smSeance.etat}|${smSeance.msg}`;
+  const seen = lsGet('sm_seen');
+  if(key !== seen){
+    lsSet('sm_seen', key);
+    const changedTour = !n || n.tour !== smSeance.tour || n.etat !== smSeance.etat;
+    if(smSeance.etat !== 'Préparation') {
+      smShowOverlay();                                  // aussi à l'arrivée d'un participant en cours de séance
+      if(smSeenInit && changedTour && smSeance.etat === 'En cours') smChime();
+    }
+  }
+  smSeenInit = true;
+  if(view === 'sm' && !pwdOpen && !(document.activeElement && /^(SELECT|INPUT|TEXTAREA)$/.test(document.activeElement.tagName))) render();
+}
+const loadSeqDone = () => loadSeq > 0 && !pending;
+function smLine(me, tour){
+  const ro = smRole(me, tour);
+  if(ro.type==='vis') return {titre:'Changez de table', texte:`Vous avez rendez-vous avec <b>${esc(smName(ro.autre))}</b>`, big:`Table ${esc(smName(ro.autre))}`, court:`Allez à la table ${smName(ro.autre)}`};
+  if(ro.type==='hote') return {titre:'Restez à votre table', texte:`Vous recevez <b>${esc(smName(ro.autre))}</b>`, big:`Table ${esc(smName(me))}`, court:`Vous recevez ${smName(ro.autre)} (table ${smName(me)})`};
+  return {titre:'Tour libre', texte:esc(SM_LIBRE), big:'', court:SM_LIBRE};
+}
+function smShowOverlay(){
+  const S2 = smSeance, box = $('#smov'); if(!S2) return;
+  const me = smMe();
+  let inner;
+  if(S2.etat === 'Terminée') inner = `<h2>Speed meeting terminé</h2><p>Merci à tous.</p>`;
+  else if(S2.etat === 'Pause') inner = `<span class="tr">Tour ${S2.tour} sur ${smTours()}</span><h2>Pause</h2><p>Le tour reprendra dans un instant.</p>`;
+  else if(!me) inner = `<span class="tr">Tour ${S2.tour} sur ${smTours()}</span><h2>Changement de tour</h2><p>Choisissez votre table dans l'onglet Speed meeting pour voir votre rendez-vous.</p>`;
+  else {
+    const L = smLine(me, S2.tour);
+    inner = `<span class="tr">Tour ${S2.tour} sur ${smTours()}</span><h2>${L.titre}</h2><p>${L.texte}</p>${L.big ? `<div class="big">${L.big}</div>` : ''}
+      <div class="cd" data-smcd>${mmss(smRemaining())}</div>`;
+  }
+  if(S2.msg) inner += `<p style="margin-top:14px; font-size:17px; color:var(--red)"><b>${esc(S2.msg)}</b></p>`;
+  box.innerHTML = `<div class="smov" id="smovBd"><div class="smbox" role="alertdialog" aria-live="assertive">${inner}
+    <div style="margin-top:18px"><button class="primary" id="smOk">J'ai compris</button></div></div></div>`;
+  $('#smOk').onclick = () => { box.innerHTML = ''; };
+  $('#smOk').focus();
+}
+function smBar(){
+  const b = $('#smbar'), S2 = smSeance, me = smMe();
+  if(!S2 || !['En cours','Pause'].includes(S2.etat)){ b.style.display = 'none'; return; }
+  const L = me ? smLine(me, S2.tour) : {court:'choisissez votre table (onglet Speed meeting)'};
+  b.style.display = 'flex';
+  b.innerHTML = `<b>Speed meeting — tour ${S2.tour}/${smTours()}</b>
+    <span class="cd" data-smcd>${S2.etat==='Pause' ? 'Pause' : mmss(smRemaining())}</span>
+    <span>${me ? esc(smName(me)) + ' : ' : ''}${esc(L.court)}</span>
+    ${S2.msg ? `<span>— ${esc(S2.msg)}</span>` : ''}
+    <button id="smBarOpen">Voir</button>`;
+  $('#smBarOpen').onclick = smShowOverlay;
+}
+setInterval(pollSeance, SM_POLL_MS);
+setInterval(() => {
+  if(!smSeance) return;
+  const txt = smSeance.etat==='Pause' ? 'Pause' : smRemaining() ? mmss(smRemaining()) : 'Temps écoulé';
+  document.querySelectorAll('[data-smcd]').forEach(e => e.textContent = txt);
+}, 1000);
+
+// ---- pilotage (administration) ----
+async function smSetSeance(fields){
+  if(!await requireAdmin()) return;
+  try{
+    if(smSeance && smSeance.id) await grist.docApi.applyUserActions([['UpdateRecord', T_SMS, smSeance.id, fields]]);
+    else await grist.docApi.applyUserActions([['AddRecord', T_SMS, null, Object.assign({Tour_actif:1, Duree_min:SMU.duree, Etat:'Préparation', Message:''}, fields)]]);
+  }catch(err){ alert("Écriture impossible dans SM_Seance : " + err.message); }
+  await pollSeance();
+}
+const nowS = () => Math.round(Date.now()/1000);
+const smGoTour = t => smSetSeance({Tour_actif:t, Debut_tour:nowS(), Duree_min:SMU.duree, Etat:'En cours'});
+async function smPause(){
+  if(!smSeance) return;
+  if(smSeance.etat === 'Pause') return smSetSeance({Debut_tour:nowS(), Etat:'En cours'});
+  return smSetSeance({Duree_min: smRemaining()/60, Debut_tour:null, Etat:'Pause'});
+}
+
+// Proposition automatique : tournoi toutes rondes (méthode du cercle), ajustable ensuite dans la grille
+async function smGenerate(){
+  if(!await requireAdmin()) return;
+  const ps = smParts.map(p => p.id);
+  if(ps.length < 2){ alert('Renseignez au moins deux participants dans SM_Participants.'); return; }
+  // nombre impair : une place « libre » fictive (0) donne un tour libre à chacun ; nombre pair : n-1 tours sans pause
+  const arr = ps.length % 2 ? [...ps, 0] : [...ps];
+  const n = arr.length, rounds = n - 1, hosted = {};
+  const grpOf = id => (smParts.find(p => p.id===id) || {}).grp;
+  const rows = [];
+  let cur = arr.slice();
+  for(let r = 0; r < rounds; r++){
+    for(let i = 0; i < n/2; i++){
+      const a = cur[i], b = cur[n-1-i];
+      if(a <= 0 || b <= 0) continue;
+      if(SMU.excl && grpOf(a) && grpOf(a) === grpOf(b)) continue;
+      // alternance recevoir / se déplacer (équilibre de la méthode du cercle)
+      const [h, v] = (i === 0 ? r % 2 === 0 : i % 2 === 1) ? [a, b] : [b, a];
+      hosted[h] = (hosted[h]||0) + 1;
+      rows.push({tour:r+1, h, v});
+    }
+    cur = [cur[0], cur[n-1], ...cur.slice(1, n-1)];
+  }
+  // tours sans aucune rencontre supprimés, numérotation compacte
+  const used = [...new Set(rows.map(x => x.tour))].sort((a,b) => a-b);
+  rows.forEach(x => x.tour = used.indexOf(x.tour) + 1);
+  if(!confirm(`Proposition : ${used.length} tours, ${rows.length} rencontres.\n\nRemplacer les ${smRots.length} rotation(s) existante(s) ?`)) return;
+  await act([...smRots.map(r => ['RemoveRecord', T_SMR, r.id]),
+             ...rows.map(x => ['AddRecord', T_SMR, null, {Tour:x.tour, Hote:x.h, Visiteur:x.v}])]);
+}
+async function smAddPair(){
+  if(!await requireAdmin()) return;
+  const t = +$('#smT').value, h = +$('#smH').value, v = +$('#smV').value;
+  if(!t || !h || !v){ alert('Choisissez le tour, la table qui reçoit et la table qui se déplace.'); return; }
+  if(h === v){ alert('Une table ne peut pas se recevoir elle-même.'); return; }
+  const busy = smRots.filter(r => r.tour===t).flatMap(r => [r.hote, r.vis]);
+  if((busy.includes(h) || busy.includes(v)) && !confirm('Une de ces tables a déjà un rendez-vous à ce tour. Ajouter quand même ?')) return;
+  SMU.tour = t;
+  await act([['AddRecord', T_SMR, null, {Tour:t, Hote:h, Visiteur:v}]]);
+}
+async function smDelPair(id){ if(await requireAdmin()) await act([['RemoveRecord', T_SMR, id]]); }
+async function smSwap(id){
+  if(!await requireAdmin()) return;
+  const r = smRots.find(x => x.id===id); if(r) await act([['UpdateRecord', T_SMR, id, {Hote:r.vis, Visiteur:r.hote}]]);
+}
+
+function viewSM(){
+  if(!hasSM) return `<div class="sheet"><h2>Speed meeting</h2><p class="empty">Créez dans Grist les tables <b>SM_Participants</b> (Nom, Groupement),
+    <b>SM_Rotations</b> (Tour, Hote, Visiteur) et <b>SM_Seance</b> (Tour_actif, Debut_tour, Duree_min, Etat, Message).</p></div>`;
+  const me = smMe(), S2 = smSeance, nT = smTours();
+  let h = `<div class="sheet"><h2>Speed meeting — mon programme</h2>
+    <div class="toolbar" style="margin:6px 0 10px">
+      <div class="fg"><label>Ma table</label><select id="smMe">${opts(smParts, me, [0,'— choisir —'])}</select></div>
+      <button id="smSound">${smAudio && smAudio.state==='running' ? '🔔 Son activé (tester)' : '🔈 Activer le son'}</button>
+    </div>`;
+  if(S2 && ['En cours','Pause'].includes(S2.etat) && me){
+    const L = smLine(me, S2.tour);
+    h += `<div class="fdet" style="font-size:15px"><b>Tour ${S2.tour} — ${L.titre}</b> : ${L.court} — <span data-smcd>${mmss(smRemaining())}</span></div>`;
+  }
+  if(me){
+    h += `<table class="grid fixed" style="margin-top:8px"><colgroup><col style="width:12%"><col style="width:30%"><col style="width:58%"></colgroup>
+      <tr><th>Tour</th><th>Consigne</th><th>Rendez-vous</th></tr>`;
+    for(let t = 1; t <= nT; t++){
+      const ro = smRole(me, t);
+      const cons = ro.type==='vis' ? 'Changer de table' : ro.type==='hote' ? 'Rester à ma table' : 'Tour libre';
+      const rdv = ro.type==='vis' ? `${esc(smName(ro.autre))} — table ${esc(smName(ro.autre))}` : ro.type==='hote' ? `Je reçois ${esc(smName(ro.autre))}` : esc(SM_LIBRE);
+      h += `<tr style="${S2 && S2.tour===t && S2.etat!=='Préparation' ? 'background:#fff8e1' : ''}"><td class="c"><b>${t}</b></td><td>${cons}</td><td>${rdv}</td></tr>`;
+    }
+    h += `</table>`;
+  } else h += `<p class="hint">Choisissez votre table : ce choix est mémorisé sur ce poste. Pensez à activer le son.</p>`;
+  h += `</div>`;
+
+  // ---------- administration ----------
+  if(!unlocked){
+    h += `<div class="sheet no-print"><h2>Pilotage</h2><p class="hint">Réservé à l'administration.</p><button class="admin" id="smUnlock">🔒 Déverrouiller</button></div>`;
+  } else {
+    h += `<div class="sheet no-print"><h2>Pilotage</h2>
+      <div class="meta">État : <b>${S2 ? esc(S2.etat) : 'aucune séance'}</b>${S2 ? ` — tour ${S2.tour}/${nT} — ${S2.etat==='En cours' ? 'reste ' + mmss(smRemaining()) : ''}` : ''}</div>
+      <div class="toolbar">
+        <div class="fg"><label>Durée d'un tour (min)</label><input type="number" id="smDur" min="1" value="${SMU.duree}" style="width:90px; font:inherit; padding:6px 9px; border-radius:6px; border:1px solid #d3cdc3"></div>
+        <button class="primary" id="smStart">▶ Démarrer (tour 1)</button>
+        <button id="smPrev" ${S2 && S2.tour > 1 ? '' : 'disabled'}>◀ Tour précédent</button>
+        <button id="smNext" ${S2 && S2.tour < nT ? '' : 'disabled'}>Tour suivant ▶</button>
+        <button id="smPause" ${S2 && ['En cours','Pause'].includes(S2.etat) ? '' : 'disabled'}>${S2 && S2.etat==='Pause' ? 'Reprendre' : 'Pause'}</button>
+        <button class="danger" id="smEnd" ${S2 ? '' : 'disabled'}>Terminer</button>
+      </div>
+      <div class="toolbar">
+        <div class="fg" style="flex:1"><label>Message diffusé à tous</label><input type="text" id="smMsg" value="${esc(S2 ? S2.msg : '')}" placeholder="Ex. : 5 minutes de pause supplémentaires"></div>
+        <button id="smMsgGo">Diffuser</button><button id="smMsgClear">Effacer</button>
+      </div></div>`;
+
+    // grille tours × participants
+    const cnt = {}, pairs = {};
+    smRots.forEach(r => {
+      [r.hote, r.vis].forEach(p => { const k = r.tour+'|'+p; cnt[k] = (cnt[k]||0) + 1; });
+      const pk = [r.hote, r.vis].sort().join('-'); pairs[pk] = (pairs[pk]||0) + 1;
+    });
+    h += `<div class="sheet no-print"><h2>Rencontres</h2>
+      <div class="toolbar">
+        <button id="smGen">Proposer une répartition automatique</button>
+        <label class="ck" style="font-size:12px; display:flex; gap:4px; align-items:center"><input type="checkbox" id="smExcl" ${SMU.excl?'checked':''}> Pas de rencontre entre tables d'un même groupement</label>
+      </div>
+      <p class="hint" style="margin:0 0 6px">⌂ reçoit à sa table · → se déplace vers la table indiquée · rouge : table placée deux fois dans le tour · contour orange : rencontre en double.</p>
+      <div style="overflow-x:auto"><table class="grid smgrid"><tr><th>Tour</th>${smParts.map(p => `<th>${esc(p.nom)}</th>`).join('')}</tr>`;
+    for(let t = 1; t <= Math.max(nT, 1); t++){
+      h += `<tr class="${S2 && S2.tour===t && S2.etat!=='Préparation' ? 'cur' : ''}"><th>${t}</th>`;
+      smParts.forEach(p => {
+        const ro = smRole(p.id, t), bad = (cnt[t+'|'+p.id]||0) > 1;
+        const dup = ro.r && pairs[[ro.r.hote, ro.r.vis].sort().join('-')] > 1;
+        const txt = ro.type==='hote' ? '⌂ ' + smName(ro.autre) : ro.type==='vis' ? '→ ' + smName(ro.autre) : '—';
+        h += `<td class="${bad ? 'bad' : ro.type==='hote' ? 'h' : ro.type==='vis' ? 'v' : ''} ${dup ? 'dup' : ''}">${esc(txt)}</td>`;
+      });
+      h += `</tr>`;
+    }
+    h += `</table></div>
+      <h3>Modifier un tour</h3>
+      <div class="toolbar">
+        <div class="fg"><label>Tour</label><input type="number" id="smT" min="1" value="${SMU.tour}" style="width:80px; font:inherit; padding:6px 9px; border-radius:6px; border:1px solid #d3cdc3"></div>
+        <div class="fg"><label>Table qui reçoit</label><select id="smH">${opts(smParts, 0, [0,'—'])}</select></div>
+        <div class="fg"><label>Table qui se déplace</label><select id="smV">${opts(smParts, 0, [0,'—'])}</select></div>
+        <button class="primary" id="smAdd">Ajouter la rencontre</button>
+      </div>
+      <div>${smRots.filter(r => r.tour===SMU.tour).map(r => `<span class="pair">⌂ ${esc(smName(r.hote))} ← ${esc(smName(r.vis))}
+          <button data-smswap="${r.id}" title="Inverser qui reçoit">⇄</button><button data-smdel="${r.id}" title="Supprimer">✕</button></span>`).join('')
+        || `<span class="hint">Aucune rencontre au tour ${SMU.tour}.</span>`}</div>
+      <p class="hint">Tables libres au tour ${SMU.tour} : ${esc(smParts.filter(p => smRole(p.id, SMU.tour).type==='libre').map(p => p.nom).join(', ') || 'aucune')}.</p>
+    </div>`;
+  }
+  setTimeout(bindSM);
+  return h;
+}
+function bindSM(){
+  if($('#smMe')) $('#smMe').onchange = e => { lsSet('sm_me', e.target.value); smBar(); render(); };
+  if($('#smSound')) $('#smSound').onclick = smEnableSound;
+  if($('#smUnlock')) $('#smUnlock').onclick = async () => { if(await requireAdmin()) render(); };
+  if(!unlocked || !$('#smStart')) return;
+  $('#smDur').onchange = e => { SMU.duree = Math.max(1, +e.target.value || 20); };
+  $('#smStart').onclick = () => { if(confirm('Démarrer le speed meeting au tour 1 ?')) smGoTour(1); };
+  $('#smPrev').onclick = () => smGoTour(smSeance.tour - 1);
+  $('#smNext').onclick = () => smGoTour(smSeance.tour + 1);
+  $('#smPause').onclick = smPause;
+  $('#smEnd').onclick = () => { if(confirm('Terminer le speed meeting ?')) smSetSeance({Etat:'Terminée'}); };
+  $('#smMsgGo').onclick = () => smSetSeance({Message: $('#smMsg').value.trim()});
+  $('#smMsgClear').onclick = () => smSetSeance({Message: ''});
+  $('#smGen').onclick = smGenerate;
+  $('#smExcl').onchange = e => { SMU.excl = e.target.checked; };
+  $('#smT').onchange = e => { SMU.tour = Math.max(1, +e.target.value || 1); render(); };
+  $('#smAdd').onclick = smAddPair;
+  document.querySelectorAll('[data-smdel]').forEach(b => b.onclick = () => smDelPair(+b.dataset.smdel));
+  document.querySelectorAll('[data-smswap]').forEach(b => b.onclick = () => smSwap(+b.dataset.smswap));
 }
 
 /* ================= Rafraîchissement automatique ================= */
