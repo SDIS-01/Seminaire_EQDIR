@@ -225,7 +225,7 @@
     <button class="tab" data-v="charge">Charge</button>
     <button class="tab" data-v="etat">État groupement / collaborateur</button>
     <button class="tab" data-v="projet">État par projet</button>
-    <button class="tab" data-v="prio">État priorité / DDSIS</button>
+    <button class="tab" data-v="prio">État par priorité</button>
     <button class="tab" data-v="p2a">P2A 2027</button>
     <button class="tab" data-v="ve">Valeur / effort</button>
     <button class="tab" data-v="bilan">Bilan 2027</button>
@@ -298,7 +298,7 @@ const matchPorteur = p => (!F.grp || p.porteur===F.grp) && (!F.col || p.pcol===F
 const prioRank = p => { const i = PRIOS.indexOf(p.prio); return i<0 ? 99 : i; };
 const byPrio = (a,b) => prioRank(a)-prioRank(b) || a.nom.localeCompare(b.nom,'fr');
 const prioBadge = p => p.prio ? `<span class="badge b-${esc(p.prio)}">${esc(p.prio)}</span>` : '';
-const ddBadge = p => p.dd ? `<span class="badge dd">Roadmap DDSIS</span>` : '';
+const ddBadge = p => '';                            // Roadmap DDSIS : jamais affichée (état protégé uniquement)
 function txtFilter(){
   return `<div class="fg"><label>Intitulé du projet</label>
     <input type="text" id="fTxt" placeholder="Mot du libellé" value="${esc(F.txt)}" style="min-width:180px"></div>`;
@@ -307,7 +307,7 @@ function pdFilters(){
   return txtFilter() + (hasPrio ? `<div class="fg"><label>Priorité</label><select id="fPrio">
       <option value="">Toutes</option>${PRIOS.map(v=>`<option ${F.prio===v?'selected':''}>${v}</option>`).join('')}
       <option value="__none" ${F.prio==='__none'?'selected':''}>Sans priorité</option></select></div>` : '')
-   + (hasDD ? `<div class="fg"><label>Roadmap DDSIS</label><select id="fDD">
+   + (false ? `<div class="fg"><label>Roadmap DDSIS</label><select id="fDD">
       <option value="">Tous</option><option value="oui" ${F.dd==='oui'?'selected':''}>Oui</option>
       <option value="non" ${F.dd==='non'?'selected':''}>Non</option></select></div>` : '');
 }
@@ -442,6 +442,7 @@ function render(){
     }
   }
   bindPD();
+  if(['etat','projet','prio'].includes(view)) bindScb();
   renderModal();
 }
 
@@ -507,7 +508,7 @@ function kViewSel(){
 }
 function kTools(){
   return `<div class="fg"><label>Tri des cartes</label><select id="kSort">
-      ${[['prio','Priorité'],['porteur','Porteur'],['nom','Nom'],['dd','Roadmap DDSIS d\'abord']].map(([v,l]) => `<option value="${v}" ${K.sort===v?'selected':''}>${l}</option>`).join('')}
+      ${[['prio','Priorité'],['porteur','Porteur'],['nom','Nom']].map(([v,l]) => `<option value="${v}" ${K.sort===v?'selected':''}>${l}</option>`).join('')}
     </select></div>
     <div class="ktools"><label class="ck"><input type="checkbox" id="kCompact" ${K.compact?'checked':''}> Mode compact</label>
     <button id="fReset">Réinitialiser</button></div>`;
@@ -701,6 +702,7 @@ async function toggleImpact(prjId, q, grp){
   const imp = l.some(a => a.imp==='Fort') ? 'Faible' : 'Fort';
   await actOpt(l.map(a => ['UpdateRecord', T.AFF, a.id, {Impact:imp}]), () => l.forEach(a => a.imp = imp));
 }
+if(K.sort==='dd') K.sort = 'prio';
 const kSort = {
   prio: byPrio,
   porteur: (a,b) => gName(a.porteur).localeCompare(gName(b.porteur),'fr') || byPrio(a,b),
@@ -862,6 +864,38 @@ function viewCharge(){
 }
 
 /* ================= États groupement / collaborateur ================= */
+// Tableau commun aux états : Projet | Porteur | T1..T4 (étiquettes par groupement, 💬 au clic) | ligne de total
+function tagCell(la, p, qi, ctx, withNames){
+  const by = {}, cm = {}, nm = {};
+  la.filter(a => a.prj===p.id && a.q===Q[qi]).forEach(a => {
+    if(!by[a.grp] || a.imp==='Fort') by[a.grp] = a.imp;
+    if(a.col && withNames) (nm[a.grp] = nm[a.grp] || new Set()).add(shortName(cName(a.col)));
+    if(a.com) (cm[a.grp] = cm[a.grp] || []).push((a.col ? cName(a.col)+' : ' : '') + a.com);
+  });
+  return Object.entries(by).sort(([x],[y]) => gName(+x).localeCompare(gName(+y),'fr')).map(([g,imp]) => {
+    const key = `${ctx}|${p.id}|${qi}|${g}`, open = S.open.has(key);
+    const noms = nm[g] ? ` <span class="nm">(${esc([...nm[g]].join(', '))})</span>` : '';
+    return `<div class="tag ${open?'hl':''}" style="display:inline-block;margin:1px">${esc(gName(+g))} <b class="${esc(imp)}">${esc((imp||'?').toLowerCase())}</b>${noms}${cm[g]?`<span class="cbub scb" data-key="${esc(key)}" role="button" tabindex="0" title="Afficher le commentaire">💬</span>`:''}</div>`
+         + (open && cm[g] ? `<div class="gcom" style="margin:2px 0 4px">${esc(gName(+g))} — ${esc(cm[g].join('\n'))}</div>` : '');
+  }).join('');
+}
+function listTable(list, la, ctx, totalLabel, totalFn, withNames){
+  let h = `<table class="grid fixed"><colgroup><col style="width:28%"><col style="width:16%">${QS.map(()=>'<col style="width:14%">').join('')}</colgroup>
+    <tr><th>Projet</th><th>Porteur</th>${QS.map(x=>`<th>${x}</th>`).join('')}</tr>`;
+  list.forEach(p => {
+    h += `<tr><td>${esc(p.nom)} ${prioBadge(p)} ${ddBadge(p)}</td><td>${porteurTxt(p)}</td>`;
+    Q.forEach((q,qi) => h += `<td>${tagCell(la, p, qi, ctx, withNames)}</td>`);
+    h += `</tr>`;
+  });
+  return h + `<tr><th colspan="2">${totalLabel}</th>${Q.map(q=>`<td class="c"><b>${totalFn(q)}</b></td>`).join('')}</tr></table>`;
+}
+const legendCom = 'Clic sur 💬 : affiche ou masque le commentaire (les commentaires affichés sont imprimés).';
+function bindScb(){
+  document.querySelectorAll('.scb').forEach(b => {
+    const tg = e => { e.preventDefault(); const k = b.dataset.key; S.open.has(k) ? S.open.delete(k) : S.open.add(k); render(); };
+    b.onclick = tg; b.onkeydown = e => { if(e.key==='Enter'||e.key===' ') tg(e); };
+  });
+}
 function cellList(list, showNames){
   return list.map(a => {
     const who = a.col && showNames ? ` <span class="nom">${esc(cName(a.col))}</span>` : '';
@@ -869,40 +903,22 @@ function cellList(list, showNames){
   }).join('');
 }
 function sheetGroupement(g){
-  const ga = affs.filter(a=>a.grp===g.id);
-  const prjIds = [...new Set(ga.map(a=>a.prj))];
-  const list = projets.filter(p=>prjIds.includes(p.id) && matchPD(p)).sort(byPrio);
-  let h = `<div class="sheet"><h2>État du groupement ${esc(g.nom)}</h2><div class="meta">Planning 2027 — édité le ${today()}</div>`;
-  if(!list.length) h += `<p class="empty">Aucun projet n'impacte ce groupement.</p>`;
-  else {
-    h += `<table class="grid fixed"><colgroup><col style="width:28%"><col style="width:16%">${QS.map(()=>'<col style="width:14%">').join('')}</colgroup><tr><th>Projet</th><th>Porteur</th>${QS.map(s=>`<th>${s}</th>`).join('')}</tr>`;
-    list.forEach(p => {
-      h += `<tr><td>${esc(p.nom)} ${prioBadge(p)} ${ddBadge(p)}</td><td>${porteurTxt(p)}</td>`;
-      Q.forEach(q => h += `<td>${cellList(ga.filter(a=>a.prj===p.id && a.q===q), hasCollab)}</td>`);
-      h += `</tr>`;
-    });
-    h += `<tr><th colspan="2">Charge</th>${Q.map(q=>{const v=chargeGrp(g.id,q);return `<td class="heat ${lvl(v)}">${v} pts</td>`;}).join('')}</tr></table>`;
-  }
-  return h + `<p class="legend">Faible = 1 pt, Fort = 2 pts. La charge du groupement inclut ses affectations nominatives.</p></div>`;
+  const la = affs.filter(a => a.grp===g.id);
+  const ids = new Set(la.map(a => a.prj));
+  const list = projets.filter(p => ids.has(p.id) && matchPD(p)).sort(byPrio);
+  let h = `<div class="sheet"><h2>État du groupement ${esc(g.nom)}</h2><div class="meta">Planning 2027 — ${list.length} projet(s) — édité le ${today()}</div>`;
+  if(!list.length) return h + `<p class="empty">Aucun projet n'impacte ce groupement.</p></div>`;
+  h += listTable(list, la, 'g'+g.id, 'Charge du groupement', q => chargeGrp(g.id, q), hasCollab);
+  return h + `<p class="legend">Faible = 1 pt, Fort = 2 pts. La charge inclut les affectations nominatives et tous les projets. ${legendCom}</p></div>`;
 }
 function sheetCollab(c){
-  const own = affs.filter(a=>a.col===c.id);
-  const via = affs.filter(a=>a.grp===c.grp && !a.col);
-  const prjIds = [...new Set([...own,...via].map(a=>a.prj))];
-  const list = projets.filter(p=>prjIds.includes(p.id) && matchPD(p)).sort(byPrio);
-  let h = `<div class="sheet"><h2>État de ${esc(c.nom)}</h2><div class="meta">Groupement ${esc(gName(c.grp))} — planning 2027 — édité le ${today()}</div>`;
+  const la = affs.filter(a => a.col===c.id || (!a.col && a.grp===c.grp));
+  const ids = new Set(la.map(a => a.prj));
+  const list = projets.filter(p => ids.has(p.id) && matchPD(p)).sort(byPrio);
+  let h = `<div class="sheet"><h2>État de ${esc(c.nom)}</h2><div class="meta">Groupement ${esc(gName(c.grp))} — planning 2027 — ${list.length} projet(s) — édité le ${today()}</div>`;
   if(!list.length) return h + `<p class="empty">Aucun projet ne concerne ce collaborateur.</p></div>`;
-  h += `<table class="grid fixed"><colgroup><col style="width:28%"><col style="width:16%">${QS.map(()=>'<col style="width:14%">').join('')}</colgroup><tr><th>Projet</th><th>Porteur</th>${QS.map(s=>`<th>${s}</th>`).join('')}</tr>`;
-  list.forEach(p => {
-    h += `<tr><td>${esc(p.nom)} ${prioBadge(p)} ${ddBadge(p)}</td><td>${porteurTxt(p)}</td>`;
-    Q.forEach(q => {
-      const o = own.filter(a=>a.prj===p.id && a.q===q), v = via.filter(a=>a.prj===p.id && a.q===q);
-      h += `<td>${cellList(o,false)}${v.map(a=>`<div class="via"><span class="chip ${esc(a.imp)}">${esc(a.imp||'?')}</span></div>${comHtml(a)}`).join('')}</td>`;
-    });
-    h += `</tr>`;
-  });
-  h += `<tr><th colspan="2">Charge du collaborateur</th>${Q.map(q=>{const v=chargeCol(c.id,q);return `<td class="heat ${lvl(v)}">${v} pts</td>`;}).join('')}</tr></table>`;
-  return h + `<p class="legend">La charge du collaborateur ne compte que les affectations nominatives. Les impacts en italique concernent l'ensemble de son groupement.</p></div>`;
+  h += listTable(list, la, 'c'+c.id, 'Charge du collaborateur', q => chargeCol(c.id, q), true);
+  return h + `<p class="legend">Étiquettes : impacts nominatifs (nom entre parenthèses) et impacts de tout son groupement. La charge du collaborateur ne compte que les affectations nominatives. ${legendCom}</p></div>`;
 }
 function viewEtat(){
   const canCol = hasCollab;
@@ -927,20 +943,7 @@ function viewEtat(){
 
 /* ================= État par projet ================= */
 function sheetProjet(p){
-  const pa = affsOf(p.id);
-  const gIds = [...new Set(pa.map(a=>a.grp))];
-  const list = grps.filter(g=>gIds.includes(g.id));
-  let h = `<div class="sheet" style="--suit:${gColor(p.porteur)}"><h2>${esc(p.nom)} ${prioBadge(p)} ${ddBadge(p)}</h2>
-    <div class="meta">Porteur : <span class="suit">${esc(gName(p.porteur))}</span>${p.pcol ? ' ' + esc(cName(p.pcol)) : ''} — édité le ${today()}</div>`;
-  if(!list.length) return h + `<p class="empty">Projet non planifié.</p></div>`;
-  h += `<table class="grid"><tr><th>Groupement impacté</th>${QS.map(s=>`<th>${s}</th>`).join('')}</tr>`;
-  list.forEach(g => {
-    h += `<tr><td>${esc(g.nom)}</td>`;
-    Q.forEach(q => h += `<td>${cellList(pa.filter(a=>a.grp===g.id && a.q===q), hasCollab)}</td>`);
-    h += `</tr>`;
-  });
-  h += `<tr><th>Points du projet</th>${Q.map(q=>`<td class="c"><b>${sum(pa.filter(a=>a.q===q))}</b></td>`).join('')}</tr></table></div>`;
-  return h;
+  return sheetListe(p.nom, `Porteur : ${porteurTxt(p)} — planning 2027`, [p], 'p'+p.id);
 }
 function viewEtatProjet(){
   let h = `<div class="toolbar no-print">
@@ -954,29 +957,13 @@ function viewEtatProjet(){
 }
 
 /* ================= État priorité / DDSIS ================= */
-function sheetListe(titre, meta, list){
+function sheetListe(titre, meta, list, ctx){
   let h = `<div class="sheet"><h2>${esc(titre)}</h2><div class="meta">${meta} — ${list.length} projet(s) — édité le ${today()}</div>`;
   if(!list.length) return h + `<p class="empty">Aucun projet.</p></div>`;
   const ids = new Set(list.map(p=>p.id));
   const la = affs.filter(a=>ids.has(a.prj));
-  h += `<table class="grid fixed"><colgroup><col style="width:28%"><col style="width:16%">${QS.map(()=>'<col style="width:14%">').join('')}</colgroup><tr><th>Projet</th><th>Porteur</th>${QS.map(s=>`<th>${s}</th>`).join('')}</tr>`;
-  list.forEach(p => {
-    h += `<tr><td>${esc(p.nom)} ${prioBadge(p)} ${ddBadge(p)}</td><td>${porteurTxt(p)}</td>`;
-    Q.forEach(q => {
-      const by = {};
-      const cm = {};
-      la.filter(a=>a.prj===p.id && a.q===q).forEach(a => { if(!by[a.grp] || a.imp==='Fort') by[a.grp] = a.imp; if(a.com) (cm[a.grp] = cm[a.grp]||[]).push((a.col ? cName(a.col)+' : ' : '') + a.com); });
-      const qi = Q.indexOf(q);
-      h += `<td>${Object.entries(by).map(([g,imp]) => {
-        const key = `${p.id}|${qi}|${g}`, open = S.open.has(key);
-        return `<div class="tag ${open?'hl':''}" style="display:inline-block;margin:1px">${esc(gName(+g))} <b class="${esc(imp)}">${esc((imp||'?').toLowerCase())}</b>${cm[g]?`<span class="cbub scb" data-key="${key}" role="button" tabindex="0" title="Afficher le commentaire">💬</span>`:''}</div>`
-             + (open && cm[g] ? `<div class="gcom" style="margin:2px 0 4px">${esc(gName(+g))} — ${esc(cm[g].join('\n'))}</div>` : '');
-      }).join('')}</td>`;
-    });
-    h += `</tr>`;
-  });
-  h += `<tr><th colspan="2">Total des points</th>${Q.map(q=>`<td class="c"><b>${sum(la.filter(a=>a.q===q))}</b></td>`).join('')}</tr></table>`;
-  return h + `<p class="legend">Faible = 1 pt, Fort = 2 pts. Total cumulé de tous les groupements impactés. Clic sur 💬 : affiche ou masque le commentaire (les commentaires affichés sont imprimés).</p></div>`;
+  h += listTable(list, la, ctx || 'l', 'Total des points', q => sum(la.filter(a=>a.q===q)), hasCollab);
+  return h + `<p class="legend">Faible = 1 pt, Fort = 2 pts. Total cumulé de tous les groupements impactés. ${legendCom}</p></div>`;
 }
 function viewEtatPrio(){
   if(!hasPrio && !hasDD) return `<p class="empty">Ajoutez les colonnes Priorite et/ou DDSIS dans la table Projet pour utiliser cet état.</p>`;
@@ -985,7 +972,7 @@ function viewEtatPrio(){
   let h = `<div class="toolbar no-print">
     <div class="fg"><label>Type d'état</label><select id="sType">
       ${hasPrio?`<option value="prio" ${S.type==='prio'?'selected':''}>Par priorité</option>`:''}
-      ${hasDD?`<option value="dd" ${S.type==='dd'?'selected':''}>Roadmap DDSIS</option>`:''}</select></div>
+      ${hasDD?`<option value="dd" ${S.type==='dd'?'selected':''}>🔒 État DDSIS</option>`:''}</select></div>
     ${S.type==='prio' ? `<div class="fg"><label>Priorité</label><select id="sVal">
       <option value="all">Toutes (une page chacune)</option>
       ${[...PRIOS,'__none'].map(v=>`<option value="${v}" ${S.val===v?'selected':''}>${v==='__none'?'Sans priorité':v}</option>`).join('')}</select></div>` : ''}
@@ -996,17 +983,21 @@ function viewEtatPrio(){
     vals.forEach(v => {
       const list = projets.filter(p => matchTxt(p) && (v==='__none' ? !p.prio : p.prio===v)).sort(byPrio);
       if(S.val==='all' && v==='__none' && !list.length) return;
-      h += sheetListe(v==='__none' ? 'Projets sans priorité' : `Projets de priorité ${v}`, 'Planning 2027', list);
+      h += sheetListe(v==='__none' ? 'Projets sans priorité' : `Projets de priorité ${v}`, 'Planning 2027', list, 'pr'+v);
     });
+  } else if(!unlocked){
+    h += `<div class="sheet"><h2>État DDSIS</h2><p class="empty">Cet état est protégé par le mot de passe d'administration.</p>
+      <button class="admin" id="ddUnlock">🔒 Déverrouiller</button></div>`;
   } else {
-    h += sheetListe('Projets de la Roadmap DDSIS', 'Planning 2027', projets.filter(p=>p.dd && matchTxt(p)).sort(byPrio));
+    h += sheetListe('Projets de la Roadmap DDSIS', 'Planning 2027', projets.filter(p=>p.dd && matchTxt(p)).sort(byPrio), 'dd');
   }
   setTimeout(() => {
-    $('#sType').onchange = e => { S.type = e.target.value; S.val = 'all'; render(); };
-    document.querySelectorAll('.scb').forEach(b => {
-      const tg = e => { e.preventDefault(); const k = b.dataset.key; S.open.has(k) ? S.open.delete(k) : S.open.add(k); render(); };
-      b.onclick = tg; b.onkeydown = e => { if(e.key==='Enter'||e.key===' ') tg(e); };
-    });
+    $('#sType').onchange = async e => {
+      const t = e.target.value;
+      if(t==='dd' && !await requireAdmin()){ e.target.value = S.type; return; }
+      S.type = t; S.val = 'all'; render();
+    };
+    if($('#ddUnlock')) $('#ddUnlock').onclick = async () => { if(await requireAdmin()) render(); };
     if($('#sVal')) $('#sVal').onchange = e => { S.val = e.target.value; render(); };
   });
   return h;
@@ -1586,7 +1577,7 @@ function viewFresque(){
 
 /* ================= Valeur / effort ================= */
 // Valeur mixte : colonne Projet.Valeur (1 à 4) si renseignée, sinon score automatique
-// (P1 = 3, P2 = 2, P3 = 1, Poursuite = 1, +1 si Roadmap DDSIS, plafonné à 4).
+// (P1 = 3, P2 = 2, P3 = 1, Poursuite = 1).
 // Effort : somme des points d'impact du projet (faible = 1, fort = 2), tous groupements et trimestres.
 const V = { sub:'nuage', grp:0, cap:0 };   // cap : capacité en points (0 = non définie)
 const VAL_AUTO = { P1:3, P2:2, P3:1, Poursuite:1 };
@@ -1597,7 +1588,7 @@ const QD = {
   3:{nom:'Opportunités', desc:'Valeur faible, effort faible — si la capacité le permet', cls:'q3', col:'#b3721b'},
   4:{nom:'À éviter', desc:'Valeur faible, effort élevé — reporter ou abandonner', cls:'q4', col:'#b42318'}
 };
-const autoVal = p => Math.min(4, (VAL_AUTO[p.prio] || 1) + (p.dd ? 1 : 0));
+const autoVal = p => Math.min(4, VAL_AUTO[p.prio] || 1);
 const valeurOf = p => p.val >= 1 ? {v:Math.min(4, Math.round(p.val)), manu:true} : {v:autoVal(p), manu:false};
 const qBadge = q => `<span class="qb ${QD[q].cls}">${QD[q].nom}</span>`;
 const vPill = x => `<span class="vpill ${x.manu?'manu':''}" title="${x.manu?'Valeur ajustée':'Valeur calculée automatiquement'}">V${x.v}${x.manu?' ajustée':' auto'}</span>`;
@@ -1636,7 +1627,7 @@ function viewVE(){
   else if(V.sub==='classement') h += veClassement(d);
   else h += vePareto(d);
   if(d.unplanned.length) h += `<p class="legend">Non planifiés (effort nul, hors matrice) : ${d.unplanned.map(x => esc(x.p.nom)).join(' ; ')}</p>`;
-  h += `<p class="legend">Valeur : colonne Valeur si renseignée, sinon P1 = 3, P2 = 2, P3 = 1, Poursuite = 1, +1 si Roadmap DDSIS (max 4) ; valeur élevée à partir de ${VAL_HAUTE}.
+  h += `<p class="legend">Valeur : colonne Valeur si renseignée, sinon P1 = 3, P2 = 2, P3 = 1, Poursuite = 1 ; valeur élevée à partir de ${VAL_HAUTE}.
     Effort : somme des points d'impact (faible = 1, fort = 2) ; élevé au-delà de la médiane (${d.med}).
     ${V.sub!=='classement' ? 'Clic sur un projet : ajuster sa valeur (mot de passe).' : ''}</p></div>`;
   setTimeout(bindVE);
