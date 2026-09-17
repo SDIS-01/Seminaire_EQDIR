@@ -149,6 +149,8 @@
   .cbub{display:inline-block; margin-left:4px; padding:0 4px; border-radius:8px; background:#ffe08a; border:1px solid #e0b93a;
         font-size:11px; line-height:14px; cursor:pointer;}
   .cbub:hover{background:#ffd24d;}
+  .cbub.vide{background:#fff; border:1px dashed #b9b2a6; opacity:.75;}
+  .cbub.vide:hover{opacity:1; background:var(--soft);}
   .com{font-size:11px; color:#4a4f55; font-style:italic; margin:2px 0 4px; white-space:pre-wrap;}
   .com-edit{background:#f6f5f0; border:1px solid var(--line); border-radius:8px; padding:10px; margin-top:10px;}
   .jr{list-style:none; margin:6px 0 8px; padding:0; max-height:220px; overflow:auto;}
@@ -484,7 +486,7 @@ function chipsHtml(list, hlGrp){
                 + (v.coms.length ? `\n💬 ${v.coms.join('\n💬 ')}` : '');
     const sn = v.noms.map(shortName);
     const extra = !sn.length ? '' : ' · ' + esc(sn.slice(0,2).join(', ')) + (sn.length>2 ? ` +${sn.length-2}` : '');
-    return `<span class="tag ${+g===hlGrp?'hl':''}" data-g="${g}" data-tg="1" role="button" title="${esc(title + '\nClic : passer en ' + (v.imp==='Fort' ? 'faible' : 'fort'))}">${esc(gName(+g))} <b class="${esc(v.imp)}">${esc((v.imp||'?').toLowerCase())}</b>${extra}${v.coms.length ? `<span class="cbub" data-comg="${g}" role="button" tabindex="0" title="Ouvrir le commentaire">💬</span>` : ''}</span>`;
+    return `<span class="tag ${+g===hlGrp?'hl':''}" data-g="${g}" data-tg="1" role="button" title="${esc(title + '\nClic : passer en ' + (v.imp==='Fort' ? 'faible' : 'fort'))}">${esc(gName(+g))} <b class="${esc(v.imp)}">${esc((v.imp||'?').toLowerCase())}</b>${extra}${hasCom ? `<span class="cbub ${v.coms.length ? '' : 'vide'}" data-comg="${g}" role="button" tabindex="0" title="${v.coms.length ? 'Voir / ajouter un commentaire' : 'Ajouter un commentaire'}">💬</span>` : ''}</span>`;
   }).sort((x,y) => (y.includes(' hl"')?1:0) - (x.includes(' hl"')?1:0)).join('');
 }
 function cardHtml(p, q, list, extra){
@@ -619,8 +621,11 @@ function bindKanban(){
       const go = e => {
         e.stopPropagation(); e.preventDefault();
         const prj = +c.dataset.prj, q = Q[+c.dataset.q], g = +bu.dataset.comg;
-        const l = affsOf(prj).filter(a => a.q===q && a.grp===g && a.com);
-        const a = l.find(x=>!x.col) || l[0];             // commentaire du groupement en priorité
+        const l = affsOf(prj).filter(a => a.q===q && a.grp===g && a.id > 0);
+        const withCom = l.filter(a => a.com);
+        // collaborateur ciblé (vue porteur → impacté), puis commentaire existant du groupement, puis affectation du groupement
+        const a = (K.view==='pi' && K.ic && l.find(x => x.col===K.ic))
+               || withCom.find(x => !x.col) || withCom[0] || l.find(x => !x.col) || l[0];
         openModal(prj, a && a.id);
       };
       bu.onclick = go;
