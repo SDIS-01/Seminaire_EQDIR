@@ -1848,7 +1848,7 @@ function openValeur(prjId){
 const T_SMP = 'SM_Participants', T_SMR = 'SM_Rotations', T_SMS = 'SM_Seance';
 const SM_LIBRE = 'Tour libre — pause café';
 const SM_POLL_MS = 3000;
-let smParts = [], smRots = [], hasSM = false, smSeance = null, smSeenInit = false;
+let smParts = [], smRots = [], hasSM = false, smSeance = null, smSeenInit = false, smSeen = null;
 const SMU = { tour:1, duree:20, excl:true };           // état de l'écran d'administration
 // Mémoire du poste (localStorage), avec repli en mémoire si le navigateur le bloque
 const MEM = {};
@@ -1869,11 +1869,36 @@ function smRole(me, tour){
 }
 
 // ---- son (carillon) ----
-let smAudio = null;
+let smAudio = null, smWav = null, smSoundOn = false;
+// Secours : même carillon joué par un lecteur audio classique (fichier WAV généré en mémoire)
+function smWavUrl(){
+  if(smWav) return smWav;
+  const rate = 22050, dur = 1.9, n = Math.round(rate*dur), data = new Int16Array(n);
+  [659, 784, 1047].forEach((f, k) => {
+    const st = Math.round(k*0.22*rate);
+    for(let i = 0; i < Math.round(1.2*rate) && st+i < n; i++){
+      const t = i/rate, env = Math.min(1, t/0.02) * Math.exp(-t*4);
+      data[st+i] += Math.round(9000 * env * Math.sin(2*Math.PI*f*t));
+    }
+  });
+  const buf = new ArrayBuffer(44 + n*2), v = new DataView(buf);
+  const w = (o, str) => [...str].forEach((c, i) => v.setUint8(o+i, c.charCodeAt(0)));
+  w(0,'RIFF'); v.setUint32(4, 36+n*2, true); w(8,'WAVE'); w(12,'fmt '); v.setUint32(16,16,true); v.setUint16(20,1,true);
+  v.setUint16(22,1,true); v.setUint32(24,rate,true); v.setUint32(28,rate*2,true); v.setUint16(32,2,true); v.setUint16(34,16,true);
+  w(36,'data'); v.setUint32(40, n*2, true);
+  for(let i = 0; i < n; i++) v.setInt16(44+i*2, data[i], true);
+  smWav = URL.createObjectURL(new Blob([buf], {type:'audio/wav'}));
+  return smWav;
+}
+function smChimeFallback(){ try{ const a = new Audio(smWavUrl()); a.play().catch(() => {}); }catch(e){} }
 function smChime(){
+  if(!smSoundOn) return;
   try{
-    if(!smAudio) return;
-    if(smAudio.state === 'suspended') smAudio.resume();
+    if(!smAudio || smAudio.state !== 'running'){
+      if(smAudio) smAudio.resume().catch(() => {});
+      smChimeFallback();                                // le contexte audio n'est pas actif : lecteur de secours
+      return;
+    }
     [659, 784, 1047].forEach((f, i) => {
       const o = smAudio.createOscillator(), g = smAudio.createGain(), t = smAudio.currentTime + i*0.22;
       o.type = 'sine'; o.frequency.value = f;
@@ -1882,10 +1907,20 @@ function smChime(){
     });
   }catch(e){ console.warn(e); }
 }
-function smEnableSound(){
-  try{ smAudio = smAudio || new (window.AudioContext || window.webkitAudioContext)(); smAudio.resume(); smChime(); }catch(e){}
-  render();
+async function smEnableSound(){
+  smSoundOn = true;
+  try{
+    smAudio = smAudio || new (window.AudioContext || window.webkitAudioContext)();
+    await smAudio.resume();
+  }catch(e){ console.warn(e); }
+  smChime();                                            // carillon de test
+  render(); smBar();
 }
+// Tout clic ou touche dans le widget réactive le son s'il a été suspendu par le navigateur
+['pointerdown','keydown'].forEach(ev => document.addEventListener(ev, () => {
+  if(smSoundOn && smAudio && smAudio.state !== 'running') smAudio.resume().catch(() => {});
+}, true));
+document.addEventListener('visibilitychange', () => { if(!document.hidden) pollSeance(); });
 
 // ---- télécommande : lecture périodique ----
 function smRemaining(){
@@ -1900,15 +1935,20 @@ async function pollSeance(){
   try{ t = await grist.docApi.fetchTable(T_SMS); }catch(e){ t = null; }
   if(!t || !t.id.length){ smSeance = null; smBar(); smSeenInit = true; return; }
   const n = smSeance;
-  smSeance = { id:t.id[0], tour:+(t.Tour_actif ? t.Tour_actif[0] : 0) || 0, debut: t.Debut_tour ? t.Debut_tour[0] : null,
+  smSeance = { id:t.id[0], tour:+(t.Tour_actif ? t.Tour_actif[0] : 0) || 0, debut: smTime(t.Debut_tour ? t.Debut_tour[0] : null),
                duree: t.Duree_min ? +t.Duree_min[0] || 0 : 20, etat: t.Etat ? (t.Etat[0] || 'Préparation') : 'Préparation',
                msg: t.Message ? (t.Message[0] || '') : '' };
   smBar();
   // Affichage automatique quand le tour, l'état ou le message change
   const key = `${smSeance.tour}|${smSeance.etat}|${smSeance.msg}`;
-  const seen = lsGet('sm_seen');
+  const seen = smSeen;
   if(key !== seen){
-    lsSet('sm_seen', key);
+    smSeen = key;
+    // programme à jour avant d'afficher (il a pu être modifié depuis le dernier chargement)
+    try{
+      const [smp, smr] = await Promise.all([T_SMP, T_SMR].map(x => grist.docApi.fetchTable(x)));
+      loadSM(smp, smr);
+    }catch(e){ console.warn(e); }
     const changedTour = !n || n.tour !== smSeance.tour || n.etat !== smSeance.etat;
     if(smSeance.etat !== 'Préparation') {
       smShowOverlay();                                  // aussi à l'arrivée d'un participant en cours de séance
@@ -1917,6 +1957,12 @@ async function pollSeance(){
   }
   smSeenInit = true;
   if(view === 'sm' && !pwdOpen && !(document.activeElement && /^(SELECT|INPUT|TEXTAREA)$/.test(document.activeElement.tagName))) render();
+}
+function smTime(v){
+  if(v === null || v === undefined || v === '') return null;
+  if(typeof v === 'number') return v;
+  if(Array.isArray(v) && typeof v[1] === 'number') return v[1];      // valeur encodée Grist ['d', …]
+  const ms = Date.parse(v); return isNaN(ms) ? null : Math.round(ms/1000);
 }
 const loadSeqDone = () => loadSeq > 0 && !pending;
 function smLine(me, tour){
@@ -1939,8 +1985,10 @@ function smShowOverlay(){
   }
   if(S2.msg) inner += `<p style="margin-top:14px; font-size:17px; color:var(--red)"><b>${esc(S2.msg)}</b></p>`;
   box.innerHTML = `<div class="smov" id="smovBd"><div class="smbox" role="alertdialog" aria-live="assertive">${inner}
-    <div style="margin-top:18px"><button class="primary" id="smOk">J'ai compris</button></div></div></div>`;
+    <div style="margin-top:18px"><button class="primary" id="smOk">J'ai compris</button>
+    ${smSoundOn ? '' : ' <button id="smOvSound">🔇 Activer le son</button>'}</div></div></div>`;
   $('#smOk').onclick = () => { box.innerHTML = ''; };
+  if($('#smOvSound')) $('#smOvSound').onclick = e => { e.target.remove(); smEnableSound(); };
   $('#smOk').focus();
 }
 function smBar(){
@@ -1952,8 +2000,10 @@ function smBar(){
     <span class="cd" data-smcd>${S2.etat==='Pause' ? 'Pause' : mmss(smRemaining())}</span>
     <span>${me ? esc(smName(me)) + ' : ' : ''}${esc(L.court)}</span>
     ${S2.msg ? `<span>— ${esc(S2.msg)}</span>` : ''}
-    <button id="smBarOpen">Voir</button>`;
+    <button id="smBarOpen">Voir</button>
+    ${smSoundOn ? '' : '<button id="smBarSound">🔇 Activer le son</button>'}`;
   $('#smBarOpen').onclick = smShowOverlay;
+  if($('#smBarSound')) $('#smBarSound').onclick = smEnableSound;
 }
 setInterval(pollSeance, SM_POLL_MS);
 setInterval(() => {
@@ -2032,7 +2082,7 @@ function viewSM(){
   let h = `<div class="sheet"><h2>Speed meeting — mon programme</h2>
     <div class="toolbar" style="margin:6px 0 10px">
       <div class="fg"><label>Ma table</label><select id="smMe">${opts(smParts, me, [0,'— choisir —'])}</select></div>
-      <button id="smSound">${smAudio && smAudio.state==='running' ? '🔔 Son activé (tester)' : '🔈 Activer le son'}</button>
+      <button id="smSound" class="${smSoundOn ? '' : 'admin'}">${smSoundOn ? '🔔 Son activé (tester)' : '🔇 Activer le son'}</button>
     </div>`;
   if(S2 && ['En cours','Pause'].includes(S2.etat) && me){
     const L = smLine(me, S2.tour);
@@ -2056,6 +2106,8 @@ function viewSM(){
     h += `<div class="sheet no-print"><h2>Pilotage</h2><p class="hint">Réservé à l'administration.</p><button class="admin" id="smUnlock">🔒 Déverrouiller</button></div>`;
   } else {
     h += `<div class="sheet no-print"><h2>Pilotage</h2>
+      ${S2 && S2.etat==='En cours' && (!S2.debut || S2.debut + S2.duree*60 < Date.now()/1000 - 5 && Date.now()/1000 - S2.debut > 86400)
+        ? `<p class="hint" style="color:var(--red)">Le début du tour enregistré est incohérent : vérifiez que la colonne SM_Seance.Debut_tour est de type « Date et heure » (et non « Date »).</p>` : ''}
       <div class="meta">État : <b>${S2 ? esc(S2.etat) : 'aucune séance'}</b>${S2 ? ` — tour ${S2.tour}/${nT} — ${S2.etat==='En cours' ? 'reste ' + mmss(smRemaining()) : ''}` : ''}</div>
       <div class="toolbar">
         <div class="fg"><label>Durée d'un tour (min)</label><input type="number" id="smDur" min="1" value="${SMU.duree}" style="width:90px; font:inherit; padding:6px 9px; border-radius:6px; border:1px solid #d3cdc3"></div>
