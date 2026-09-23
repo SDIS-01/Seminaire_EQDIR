@@ -165,6 +165,11 @@
   .com-edit textarea{width:100%; min-height:70px; font:inherit; padding:6px; border-radius:6px; border:1px solid #bdb9ad;}
   #lock.on{background:var(--red); color:#fff; border-color:var(--red);}
   .admin{border-color:var(--red); color:var(--red);}
+  .prof-list{display:flex; flex-direction:column; gap:6px; margin:10px 0;}
+  .prof-list button{text-align:left; padding:8px 10px;}
+  .prof-list .sep{border-top:1px solid var(--line); margin:4px 0;}
+  #profilBtn{background:transparent; color:#fff; border-color:#6b6f78;}
+  #profilBtn:hover{background:var(--table-dark);}
   .pwdbox{background:#fff; border-radius:10px; width:min(380px,100%); padding:16px 18px; box-shadow:0 10px 30px rgba(0,0,0,.25);}
   .pwdbox input{width:100%; font:inherit; padding:7px 9px; border-radius:6px; border:1px solid #d3cdc3; margin:4px 0 8px;}
   .pwdbox .err{color:var(--red); font-size:12px; min-height:16px; margin:0 0 6px;}
@@ -273,6 +278,7 @@
     <button class="tab" data-v="sm">Speed meeting</button>
   </nav>
   <div class="hright">
+    <button id="profilBtn" title="Changer de profil">Profil : …</button>
     <button id="lock" title="Mode administration (mot de passe)">🔒 Administration</button>
     <button id="refresh" title="Recharger les données">Actualiser</button>
   </div>
@@ -282,6 +288,7 @@
 <main id="app"></main>
 <div id="modal"></div>
 <div id="pwd"></div>
+<div id="profil"></div>
 <div id="smov"></div>
 <div id="vedit"></div>
 
@@ -444,6 +451,7 @@ async function loadAll(auto){
       (quot[qd.Groupement[i]] ||= {})[qd.Trimestre[i]] = {id, v:+v};
     });
     reindex();
+    if(!profilInit){ profilInit = true; setTimeout(initProfil); }
     setStatus(hasCollab ? '' : "Colonne Affectation.Collaborateur absente : la distinction par collaborateur est désactivée.");
     render();
   }catch(err){
@@ -1227,7 +1235,8 @@ function viewP2A(){
 // Le mot de passe est stocké haché (SHA-256) dans les options du widget.
 // Barrière d'usage dans le widget : la protection réelle des tables relève des règles d'accès Grist.
 let adminHash = '', unlocked = false, pwdOpen = false;
-grist.onOptions(o => { adminHash = (o && o.adminHash) || ''; });
+let optsReadyRes; const optsReady = new Promise(r => optsReadyRes = r);
+grist.onOptions(o => { adminHash = (o && o.adminHash) || ''; optsReadyRes(); });
 async function sha(txt){
   if(window.crypto && crypto.subtle){
     const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(txt));
@@ -1992,6 +2001,61 @@ const SMU = { tour:1, duree:20, excl:true };           // état de l'écran d'ad
 const MEM = {};
 const lsGet = k => { try{ const v = localStorage.getItem(k); if(v !== null) return v; }catch(e){} return k in MEM ? MEM[k] : null; };
 const lsSet = (k, v) => { MEM[k] = v; try{ localStorage.setItem(k, v); }catch(e){} };
+
+/* ================= Profil (fenêtre d'accueil) ================= */
+// Profil mémorisé sur le poste : 'g:<id>' (un groupement), 'all' (vue d'ensemble), 'admin' (administrateur pilotage).
+// Le profil préremplit les filtres de groupement des onglets ; chacun reste modifiable ensuite.
+// Administrateur pilotage : le mot de passe est redemandé à chaque ouverture du widget.
+var profilInit = false;
+let profil = '';
+const profGrp = pr => pr && pr.startsWith('g:') ? +pr.slice(2) : 0;
+const profLabel = pr => pr === 'admin' ? 'Administrateur pilotage' : pr === 'all' ? "Vue d'ensemble" : pr ? gName(profGrp(pr)) : '—';
+function applyProfil(pr){
+  const G = profGrp(pr);
+  K.pg = G; QU.grp = G; QU.draft = null; QU.err = '';
+  E.type = 'grp'; E.id = G || 'all';
+  P.g = G || 'all'; V.grp = G; B.grp = G;
+  chargeOpen.clear(); if(G) chargeOpen.add(G);
+}
+function updateProfilBtn(){ const b = $('#profilBtn'); if(b) b.textContent = 'Profil : ' + profLabel(profil) + ' ▾'; }
+async function setProfil(pr, fromStart){
+  if(pr === 'admin'){
+    await Promise.race([optsReady, new Promise(r => setTimeout(r, 3000))]);   // mot de passe existant chargé
+    if(!await requireAdmin()){
+      if(fromStart){ profil = 'all'; applyProfil('all'); updateProfilBtn(); render(); }   // annulé : vue d'ensemble pour cette session
+      return;
+    }
+  } else if(profil === 'admin' && unlocked){ unlocked = false; updateLock(); }        // on quitte le profil administrateur
+  profil = pr; lsSet('profil', pr);
+  applyProfil(pr); updateProfilBtn(); render();
+}
+function openProfil(){
+  pwdOpen = true;
+  const box = $('#profil');
+  box.innerHTML = `<div class="backdrop" id="prBd"><div class="pwdbox" role="dialog" aria-label="Sélectionnez votre profil" style="width:min(420px,100%)">
+    <h2 style="margin:0 0 4px; font-size:15px">Sélectionnez votre groupement</h2>
+    <p class="hint" style="margin:0">Les onglets seront préréglés sur ce choix, mémorisé sur ce poste. Vous pourrez en changer à tout moment depuis le bandeau.</p>
+    <div class="prof-list">
+      ${grps.map(g => `<button data-pr="g:${g.id}" class="${profil==='g:'+g.id?'primary':''}">${esc(g.nom)}</button>`).join('')}
+      <div class="sep"></div>
+      <button data-pr="all" class="${profil==='all'?'primary':''}">Vue d'ensemble (tous les groupements)</button>
+      <button data-pr="admin" class="${profil==='admin'?'primary':''}">🔒 Administrateur pilotage (mot de passe)</button>
+    </div>
+    ${profil ? '<div class="row" style="justify-content:flex-end; margin:0"><button id="prCancel">Annuler</button></div>' : ''}
+  </div></div>`;
+  const close = () => { pwdOpen = false; box.innerHTML = ''; };
+  box.querySelectorAll('[data-pr]').forEach(b => b.onclick = async () => { close(); await setProfil(b.dataset.pr, !profil); });
+  if($('#prCancel')) $('#prCancel').onclick = close;
+  if(profil) $('#prBd').onclick = e => { if(e.target.id === 'prBd') close(); };
+}
+function initProfil(){
+  const pr = lsGet('profil') || '';
+  const valide = pr === 'all' || pr === 'admin' || (profGrp(pr) && grps.some(g => g.id === profGrp(pr)));
+  $('#profilBtn').onclick = openProfil;
+  if(!valide){ updateProfilBtn(); openProfil(); return; }
+  if(pr === 'admin') setProfil('admin', true);
+  else { profil = pr; applyProfil(pr); updateProfilBtn(); render(); }
+}
 const smMe = () => +(lsGet('sm_me') || 0);
 const smName = id => (smParts.find(x => x.id===id) || {}).nom || '—';
 function loadSM(smp, smr){
