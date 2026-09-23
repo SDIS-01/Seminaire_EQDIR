@@ -178,6 +178,18 @@
   .subtabs{display:flex; gap:4px; margin-bottom:10px;}
   .subtab{border-radius:6px; padding:5px 11px; background:#fff;}
   .subtab.on{background:var(--table); color:#fff; border-color:var(--table);}
+  .vehelp-wrap{position:relative;}
+  .vehelp-btn{width:26px; height:26px; padding:0; border-radius:50%; font-weight:600; margin-left:6px;}
+  .vehelp-btn.on{background:var(--table); color:#fff; border-color:var(--table);}
+  .vehelp{position:absolute; top:40px; left:0; width:min(560px,100%); background:#fff; border:1px solid #d3cdc3; border-radius:10px; padding:14px 16px; z-index:20; line-height:1.5; box-shadow:0 6px 18px rgba(0,0,0,.12);}
+  .vehelp:before{content:""; position:absolute; top:-7px; left:var(--ax,20px); width:12px; height:12px; background:#fff; border-left:1px solid #d3cdc3; border-top:1px solid #d3cdc3; transform:rotate(45deg);}
+  .vehelp .vh-top{display:flex; justify-content:space-between; align-items:center;}
+  .vehelp .vh-top b{font-size:14px;}
+  .vehelp .vh-x{border:0; padding:2px 6px; font-size:16px; background:transparent;}
+  .vehelp h4{margin:10px 0 2px; font-size:13px; color:var(--red);}
+  .vehelp p{margin:0; font-size:12px;}
+  .vehelp .q{display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; margin:2px 2px 0 0;}
+  .vehelp .vh-ex{margin-top:10px; padding:8px 10px; background:var(--soft); border-radius:6px;}
   .qgrid{display:grid; grid-template-columns:24px 1fr 1fr; grid-template-rows:auto 1fr 1fr; gap:8px;}
   .qax{font-size:11px; color:var(--muted); text-align:center; align-self:end;}
   .qay{font-size:11px; color:var(--muted); writing-mode:vertical-rl; transform:rotate(180deg); text-align:center; align-self:center;}
@@ -187,10 +199,9 @@
   .q1{background:#e3f3ea; color:#1f5e3d;} .q2{background:#e3ecf7; color:#244a73;}
   .q3{background:#fbf0d8; color:#6e4a00;} .q4{background:#f6e2e0; color:#7d1f17;}
   .vcard{background:#fff; color:var(--ink); border-left:4px solid var(--suit); border-radius:0 6px 6px 0; padding:5px 8px; margin-bottom:5px;
-         cursor:grab; box-shadow:0 1px 2px rgba(42,45,51,.1); font-size:12px;}
+         cursor:pointer; box-shadow:0 1px 2px rgba(42,45,51,.1); font-size:12px;}
   .vcard .vt{font-weight:600; line-height:1.25;} .vcard .vm{font-size:10px; color:var(--muted); margin-top:2px;}
   .vpill{font-size:10px; font-weight:600; padding:1px 6px; border-radius:4px; background:var(--soft); white-space:nowrap;}
-  .vpill.manu{background:#e3ecf7; color:#2f5d8a;}
   .qb{font-size:10px; font-weight:600; padding:2px 7px; border-radius:4px; white-space:nowrap;}
   .rend{display:flex; align-items:center; gap:6px;} .rend i{display:block; height:10px; border-radius:2px;}
   .vbtns{display:flex; gap:6px; margin:8px 0;} .vbtns button{min-width:44px; font-weight:600;}
@@ -277,7 +288,7 @@ const PALETTE = ['#2f5d8a','#9b2c2c','#2e7d5b','#6b4fa0','#b3621b','#1f7a7a','#7
                  '#a33a6b','#44607f','#5b7f2e','#8a6d1f','#5a4e8c','#1b6f8f','#8b5e4a'];
 
 /* ================= État ================= */
-let grps=[], collabs=[], projets=[], affs=[], hasCollab=false, hasPrjCollab=false, hasValeur=false, hasPrio=false, hasDD=false, hasCom=false, hasJournal=false, journal=[];
+let grps=[], collabs=[], projets=[], affs=[], hasCollab=false, hasPrjCollab=false, hasPrio=false, hasDD=false, hasCom=false, hasJournal=false, journal=[];
 let seuil = SEUIL_DEFAUT;
 let view = 'kanban';
 const F = { grp:0, col:0, prio:'', dd:'', txt:'' };  // filtres kanban : groupement, collaborateur
@@ -382,11 +393,10 @@ async function loadAll(auto){
     grps = g.id.map((id,i)=>({id, nom:g.Groupement[i]||'(sans nom)'}));
     collabs = c.id.map((id,i)=>({id, nom:c.Collaborateur[i]||'(sans nom)', grp:c.Groupement[i]}))
                .sort((x,y)=>x.nom.localeCompare(y.nom,'fr'));
-    hasPrjCollab = 'Collaborateur' in p; hasValeur = 'Valeur' in p; hasPrio = 'Priorite' in p; hasDD = 'DDSIS' in p;
+    hasPrjCollab = 'Collaborateur' in p; hasPrio = 'Priorite' in p; hasDD = 'DDSIS' in p;
     projets = p.id.map((id,i)=>({id, nom:p.Libelle_Projet[i]||'(sans titre)', porteur:p.Groupement_Porteur[i],
                                  pcol: hasPrjCollab ? (p.Collaborateur[i]||0) : 0,
                                  prio: hasPrio ? (p.Priorite[i]||'') : '',
-                                 val: hasValeur ? (Number(p.Valeur[i])||0) : 0,
                                  dd: hasDD ? p.DDSIS[i]===DD_VAL : false}))
                .sort((x,y)=>x.nom.localeCompare(y.nom,'fr'));
     hasCollab = 'Collaborateur' in a; hasCom = 'Commentaire' in a;
@@ -1601,10 +1611,9 @@ function viewFresque(){
 }
 
 /* ================= Valeur / effort ================= */
-// Valeur mixte : colonne Projet.Valeur (1 à 4) si renseignée, sinon score automatique
-// (P1 = 3, P2 = 2, P3 = 1, Poursuite = 1).
+// Valeur : score automatique selon la priorité (P1 = 3, P2 = 2, P3 = 1, Poursuite = 1), non modifiable.
 // Effort : somme des points d'impact du projet (faible = 1, fort = 2), tous groupements et trimestres.
-const V = { sub:'nuage', grp:0, cap:0 };   // cap : capacité en points (0 = non définie)
+const V = { sub:'nuage', grp:0, cap:0, help:false };   // help : bulle d'explication ouverte   // cap : capacité en points (0 = non définie)
 const VAL_AUTO = { P1:3, P2:2, P3:1, Poursuite:1 };
 const VAL_HAUTE = 3;                                   // valeur ≥ 3 : valeur élevée
 const QD = {
@@ -1614,15 +1623,15 @@ const QD = {
   4:{nom:'À éviter', desc:'Valeur faible, effort élevé — reporter ou abandonner', cls:'q4', col:'#b42318'}
 };
 const autoVal = p => Math.min(4, VAL_AUTO[p.prio] || 1);
-const valeurOf = p => p.val >= 1 ? {v:Math.min(4, Math.round(p.val)), manu:true} : {v:autoVal(p), manu:false};
+const valeurOf = p => ({v:autoVal(p)});
 const qBadge = q => `<span class="qb ${QD[q].cls}">${QD[q].nom}</span>`;
-const vPill = x => `<span class="vpill ${x.manu?'manu':''}" title="${x.manu?'Valeur ajustée':'Valeur calculée automatiquement'}">V${x.v}${x.manu?' ajustée':' auto'}</span>`;
+const vPill = x => `<span class="vpill" title="Valeur déduite de la priorité">V${x.v}</span>`;
 
 function veData(){
   const list = projets.filter(p => matchPD(p) && (!V.grp || p.porteur===V.grp)).map(p => {
     const pa = affsOf(p.id);
     const vv = valeurOf(p);
-    return {p, eff:sum(pa), v:vv.v, manu:vv.manu, ng:new Set(pa.map(a=>a.grp)).size};
+    return {p, eff:sum(pa), v:vv.v, ng:new Set(pa.map(a=>a.grp)).size};
   });
   const planned = list.filter(x => x.eff > 0);
   const effs = planned.map(x => x.eff).sort((a,b) => a-b);
@@ -1635,6 +1644,18 @@ function veData(){
   return {planned, unplanned: list.filter(x => !x.eff), med};
 }
 
+function veHelp(){
+  return `<div class="vehelp" id="vHelp" role="dialog" aria-label="Explication du calcul valeur / effort">
+    <div class="vh-top"><b>Comment est calculé le classement ?</b><button class="vh-x" id="vHelpX" aria-label="Fermer">×</button></div>
+    <h4>Valeur</h4><p>Déduite de la priorité du projet : P1 = ${VAL_AUTO.P1}, P2 = ${VAL_AUTO.P2}, P3 = ${VAL_AUTO.P3}, Poursuite = ${VAL_AUTO.Poursuite}. Valeur <b>élevée à partir de ${VAL_HAUTE}</b>.</p>
+    <h4>Effort</h4><p>Somme des points d'impact du projet dans le P2A, tous groupements et trimestres : faible = 1, fort = 2. Sans impact planifié : effort nul, projet hors matrice.</p>
+    <h4>Quadrants</h4><p>${[1,2,3,4].map(q => `<span class="q" style="background:${QD[q].col}1f; color:${QD[q].col}">${QD[q].nom}</span>`).join('')}</p>
+    <h4>Rendement = valeur ÷ effort</h4><p>Sert au classement (tiers vert / orange / rouge) et à la courbe de Pareto (cumuls dans l'ordre du rendement).</p>
+    <p class="vh-ex"><i>Exemple : projet P2, impact fort sur 2 groupements au T1 et faible sur 1 au T2 → valeur 2, effort 2 + 2 + 1 = 5, rendement 0,40.</i></p>
+  </div>`;
+}
+let veHelpKey = false;
+
 function viewVE(){
   const d = veData();
   const subs = [['nuage','Nuage de points'],['zones','Zones de cartes'],['classement','Classement par rendement'],['pareto','Courbe de Pareto']];
@@ -1642,8 +1663,10 @@ function viewVE(){
     <div class="fg"><label>Groupement porteur</label><select id="vG">${opts(grps, V.grp, [0,'Tous'])}</select></div>
     ${pdFilters()}
     <button class="primary" onclick="window.print()">Imprimer / PDF</button></div>
-    <div class="subtabs no-print">${subs.map(([k,l]) => `<button class="subtab ${V.sub===k?'on':''}" data-sub="${k}">${l}</button>`).join('')}</div>`;
-  if(!hasValeur) h += `<p class="hint no-print">Ajoutez la colonne <b>Valeur</b> (numérique, de 1 à 4) dans la table Projet pour pouvoir ajuster la valeur. En attendant, la valeur est calculée automatiquement.</p>`;
+    <div class="vehelp-wrap no-print">
+    <div class="subtabs" style="align-items:center">${subs.map(([k,l]) => `<button class="subtab ${V.sub===k?'on':''}" data-sub="${k}">${l}</button>`).join('')}
+      <button class="vehelp-btn ${V.help?'on':''}" id="vHelpBtn" aria-label="Comment est calculé le classement ?" title="Comment est calculé le classement ?" aria-expanded="${V.help}">?</button></div>
+    ${V.help ? veHelp() : ''}</div>`;
   h += `<div class="sheet"><h2>Valeur / effort — ${esc(subs.find(x=>x[0]===V.sub)[1])}</h2>
     <div class="meta">${V.grp ? 'Porteur ' + esc(gName(V.grp)) : 'Tous les porteurs'} — ${d.planned.length} projet(s) planifié(s) — effort médian ${d.med} pt(s) — édité le ${today()}</div>`;
   if(!d.planned.length) h += `<p class="empty">Aucun projet planifié ne correspond aux filtres.</p>`;
@@ -1652,9 +1675,9 @@ function viewVE(){
   else if(V.sub==='classement') h += veClassement(d);
   else h += vePareto(d);
   if(d.unplanned.length) h += `<p class="legend">Non planifiés (effort nul, hors matrice) : ${d.unplanned.map(x => esc(x.p.nom)).join(' ; ')}</p>`;
-  h += `<p class="legend">Valeur : colonne Valeur si renseignée, sinon P1 = 3, P2 = 2, P3 = 1, Poursuite = 1 ; valeur élevée à partir de ${VAL_HAUTE}.
+  h += `<p class="legend">Valeur : P1 = ${VAL_AUTO.P1}, P2 = ${VAL_AUTO.P2}, P3 = ${VAL_AUTO.P3}, Poursuite = ${VAL_AUTO.Poursuite} ; valeur élevée à partir de ${VAL_HAUTE}.
     Effort : somme des points d'impact (faible = 1, fort = 2) ; élevé au-delà de la médiane (${d.med}).
-    ${V.sub!=='classement' ? 'Clic sur un projet : ajuster sa valeur (mot de passe).' : ''}</p></div>`;
+    ${V.sub!=='classement' ? 'Clic sur un projet : ouvrir sa fiche.' : ''}</p></div>`;
   setTimeout(bindVE);
   return h;
 }
@@ -1691,7 +1714,7 @@ function veNuage(d){
   pts.forEach(x => {
     const lbl = x.p.nom.length > 26 ? x.p.nom.slice(0,25) + '…' : x.p.nom;
     g += `<g class="pt" data-vprj="${x.p.id}" tabindex="0">
-      <title>${esc(x.p.nom)} — porteur ${esc(gName(x.p.porteur))} — valeur ${x.v}${x.manu?' (ajustée)':' (auto)'} — effort ${x.eff} — ${x.ng} groupement(s) impacté(s)</title>
+      <title>${esc(x.p.nom)} — porteur ${esc(gName(x.p.porteur))} — valeur ${x.v} — effort ${x.eff} — ${x.ng} groupement(s) impacté(s)</title>
       <circle cx="${x.cx.toFixed(1)}" cy="${x.cy.toFixed(1)}" r="${x.r}" fill="${gColor(x.p.porteur)}" fill-opacity=".8" stroke="#fff" stroke-width="1.5"/>
       <text x="${(x.cx + x.r + 3).toFixed(1)}" y="${(x.cy + 3).toFixed(1)}" font-size="10" fill="#2a2d33">${esc(lbl)}</text></g>`;
   });
@@ -1703,7 +1726,7 @@ function veZones(d){
   const zone = q => {
     const l = d.planned.filter(x => x.qd===q).sort((a,b) => b.ratio - a.ratio);
     return `<div class="qz ${QD[q].cls}" data-qd="${q}"><h4>${q}. ${QD[q].nom} <span class="nom">(${l.length})</span></h4><p class="qs">${QD[q].desc}</p>
-      ${l.map(x => `<div class="vcard" draggable="true" tabindex="0" data-vprj="${x.p.id}" style="--suit:${gColor(x.p.porteur)}">
+      ${l.map(x => `<div class="vcard" tabindex="0" data-vprj="${x.p.id}" style="--suit:${gColor(x.p.porteur)}">
         <div class="vt">${esc(x.p.nom)} ${prioBadge(x.p)} ${ddBadge(x.p)}</div>
         <div class="vm">${esc(gName(x.p.porteur))} — ${vPill(x)} — effort ${x.eff}</div></div>`).join('') || '<div class="empty">Aucun projet</div>'}</div>`;
   };
@@ -1711,7 +1734,7 @@ function veZones(d){
     <div></div><div class="qax">Effort faible</div><div class="qax">Effort élevé</div>
     <div class="qay">Valeur élevée</div>${zone(1)}${zone(2)}
     <div class="qay">Valeur faible</div>${zone(3)}${zone(4)}</div>
-    <p class="legend no-print">Glisser une carte vers le haut ou le bas ajuste sa valeur (mot de passe). L'effort est calculé à partir du P2A : pour changer de colonne, modifiez le planning.</p>`;
+`;
 }
 
 function veClassement(d){
@@ -1789,57 +1812,22 @@ function vePareto(d){
 }
 
 function bindVE(){
+  const hb = $('#vHelpBtn');
+  if(hb){
+    hb.onclick = () => { V.help = !V.help; render(); };
+    const hp = $('#vHelp');
+    if(hp) hp.style.setProperty('--ax', (hb.offsetLeft + 7) + 'px');
+    if($('#vHelpX')) $('#vHelpX').onclick = () => { V.help = false; render(); };
+  }
+  if(!veHelpKey){ veHelpKey = true;
+    document.addEventListener('keydown', e => { if(e.key==='Escape' && V.help){ V.help = false; render(); } }); }
   if($('#vCap')) $('#vCap').onchange = e => { V.cap = Math.max(0, Math.round(+e.target.value || 0)); render(); };
   $('#vG').onchange = e => { V.grp = +e.target.value; render(); };
   document.querySelectorAll('[data-sub]').forEach(b => b.onclick = () => { V.sub = b.dataset.sub; render(); });
   document.querySelectorAll('[data-vprj]').forEach(el => {
-    el.onclick = () => openValeur(+el.dataset.vprj);
-    el.onkeydown = e => { if(e.key==='Enter') openValeur(+el.dataset.vprj); };
+    el.onclick = () => openModal(+el.dataset.vprj);
+    el.onkeydown = e => { if(e.key==='Enter') openModal(+el.dataset.vprj); };
   });
-  document.querySelectorAll('.vcard').forEach(c => {
-    c.ondragstart = e => { dragging = true; e.dataTransfer.setData('text/plain', c.dataset.vprj); };
-    c.ondragend = () => { dragging = false; };
-  });
-  document.querySelectorAll('.qz').forEach(z => {
-    z.ondragover = e => { e.preventDefault(); z.classList.add('over'); };
-    z.ondragleave = () => z.classList.remove('over');
-    z.ondrop = e => { e.preventDefault(); z.classList.remove('over'); moveValeur(+e.dataTransfer.getData('text/plain'), +z.dataset.qd); };
-  });
-}
-
-async function setValeur(prjId, v){
-  if(!hasValeur){ alert('Ajoutez la colonne Valeur (numérique) dans la table Projet pour ajuster la valeur.'); return false; }
-  if(!await requireAdmin()) return false;
-  await act([['UpdateRecord', T.PRJ, prjId, {Valeur: v}]]);     // 0 = retour au calcul automatique
-  return true;
-}
-async function moveValeur(prjId, qd){
-  const x = veData().planned.find(y => y.p.id===prjId); if(!x || x.qd===qd) return;
-  const hiV = qd <= 2, hiE = qd % 2 === 0;
-  if(hiE !== x.hiE){ alert("L'effort est calculé à partir du P2A : pour changer de colonne, modifiez le planning du projet."); return; }
-  if(hiV === x.hiV) return;
-  await setValeur(prjId, hiV ? VAL_HAUTE : VAL_HAUTE - 1);
-}
-function openValeur(prjId){
-  const p = pObj(prjId); if(!p) return;
-  const cur = valeurOf(p), auto = autoVal(p);
-  const box = $('#vedit');
-  pwdOpen = true;
-  box.innerHTML = `<div class="backdrop" id="vBd"><div class="pwdbox" role="dialog" aria-label="Valeur du projet" style="width:min(440px,100%)">
-    <h2 style="margin:0 0 4px; font-size:15px">${esc(p.nom)}</h2>
-    <p class="nom" style="margin:0 0 8px">Porteur ${esc(gName(p.porteur))} ${prioBadge(p)} ${ddBadge(p)} — valeur actuelle V${cur.v} ${cur.manu ? '(ajustée)' : '(automatique)'}</p>
-    <b style="font-size:12px">Ajuster la valeur</b>
-    <div class="vbtns">${[1,2,3,4].map(v => `<button data-v="${v}" class="${cur.manu && cur.v===v ? 'on' : ''}">${v}</button>`).join('')}</div>
-    <button id="vAuto" ${cur.manu ? '' : 'disabled'}>Revenir au calcul automatique (V${auto})</button>
-    <p class="hint">1 = faible, 4 = très forte. Modification protégée par le mot de passe d'administration.</p>
-    <div class="row" style="justify-content:space-between; margin:10px 0 0"><button id="vFiche">Ouvrir la fiche projet</button><button id="vClose">Fermer</button></div>
-  </div></div>`;
-  const close = () => { pwdOpen = false; box.innerHTML = ''; };
-  $('#vBd').onclick = e => { if(e.target.id==='vBd') close(); };
-  $('#vClose').onclick = close;
-  $('#vFiche').onclick = () => { close(); openModal(prjId); };
-  box.querySelectorAll('.vbtns button').forEach(b => b.onclick = async () => { close(); await setValeur(prjId, +b.dataset.v); });
-  $('#vAuto').onclick = async () => { close(); await setValeur(prjId, 0); };
 }
 
 /* ================= Speed meeting ================= */
