@@ -179,6 +179,14 @@
   .subtab{border-radius:6px; padding:5px 11px; background:#fff;}
   .subtab.on{background:var(--table); color:#fff; border-color:var(--table);}
   .vehelp-wrap{position:relative;}
+  .vana{background:#fff; border:1px solid var(--line); border-left:4px solid #2f5d8a; border-radius:0 8px 8px 0; padding:12px 16px; margin:10px 0 12px; line-height:1.5;}
+  .vana > b{font-size:14px;}
+  .vana h4{margin:10px 0 3px; font-size:13px; color:#2f5d8a;}
+  .vana p{margin:0; font-size:12px;}
+  .vana table{border-collapse:collapse; font-size:12px; margin-top:4px;}
+  .vana td,.vana th{border:1px solid var(--line); padding:3px 10px; text-align:center;}
+  .vana th{background:var(--soft); font-weight:600;}
+  #vAna.on{background:var(--table); color:#fff; border-color:var(--table);}
   .vehelp-btn{width:26px; height:26px; padding:0; border-radius:50%; font-weight:600; margin-left:6px;}
   .vehelp-btn.on{background:var(--table); color:#fff; border-color:var(--table);}
   .vehelp{position:absolute; top:40px; left:0; width:min(560px,100%); background:#fff; border:1px solid #d3cdc3; border-radius:10px; padding:14px 16px; z-index:20; line-height:1.5; box-shadow:0 6px 18px rgba(0,0,0,.12);}
@@ -1613,7 +1621,7 @@ function viewFresque(){
 /* ================= Valeur / effort ================= */
 // Valeur : score automatique selon la priorité (P1 = 3, P2 = 2, P3 = 1, Poursuite = 1), non modifiable.
 // Effort : somme des points d'impact du projet (faible = 1, fort = 2), tous groupements et trimestres.
-const V = { sub:'nuage', grp:0, cap:0, help:false };   // help : bulle d'explication ouverte   // cap : capacité en points (0 = non définie)
+const V = { sub:'nuage', grp:0, cap:0, help:false, ana:false };   // ana : encadré Analyse (Pareto) ouvert   // help : bulle d'explication ouverte   // cap : capacité en points (0 = non définie)
 const VAL_AUTO = { P1:3, P2:2, P3:1, Poursuite:1 };
 const VAL_HAUTE = 3;                                   // valeur ≥ 3 : valeur élevée
 const QD = {
@@ -1755,6 +1763,67 @@ function veClassement(d){
   return h + `</table><p class="legend">Vert : tiers le plus rentable ; orange : tiers intermédiaire ; rouge : tiers le moins rentable.</p>`;
 }
 
+// Encadré « Analyse » : texte généré à partir des points de la courbe (déjà triés par rendement)
+function veAnalyse(pts, totE, totV, med, cap){
+  const pc = (a, t) => t ? Math.round(a/t*100) : 0;
+  const pl = (n, m) => `${n} ${m}${n > 1 ? 's' : ''}`;
+  const sE = a => a.reduce((t,x) => t + x.eff, 0), sV = a => a.reduce((t,x) => t + x.v, 0);
+  const hi = pts.filter(x => x.v >= VAL_HAUTE), lo = pts.filter(x => x.v < VAL_HAUTE);
+  const prioHi = Object.keys(VAL_AUTO).filter(k => VAL_AUTO[k] >= VAL_HAUTE).join(', ');
+  const nomP = x => `n° ${x.rank} ${esc(x.p.nom)} (${x.eff} pt${x.eff > 1 ? 's' : ''})`;
+  let h = `<div class="vana"><b>Analyse</b>`;
+
+  // Synthèse
+  h += `<h4>Synthèse</h4><p>`;
+  if(!hi.length) h += `Aucun projet de valeur élevée (${prioHi}) parmi les ${pl(pts.length,'projet')} affichés.`;
+  else {
+    h += `${hi.length > 1 ? 'Les' : 'Le'} <b>${pl(hi.length,'projet')} de valeur élevée</b> (${prioHi}) ${hi.length > 1 ? 'apportent' : 'apporte'} <b>${pc(sV(hi),totV)} % de la valeur</b>
+      pour <b>${pc(sE(hi),totE)} % de l'effort</b> (${sE(hi)} pts sur ${totE}).`;
+    if(lo.length) h += ` ${lo.length > 1 ? `Les ${lo.length} autres consomment` : "L'autre consomme"} ${pc(sE(lo),totE)} % de l'effort (${sE(lo)} pts) pour ${pc(sV(lo),totV)} % de la valeur.`;
+  }
+  h += `</p>`;
+
+  // Cassure
+  const maxHi = hi.length ? Math.max(...hi.map(x => x.rank)) : 0;
+  h += `<h4>Cassure</h4><p>`;
+  if(!hi.length || !lo.length) h += `Tous les projets ont le même niveau de valeur : l'ordre de la courbe ne dépend que de l'effort, du plus léger au plus lourd.`;
+  else if(maxHi === hi.length) h += `La courbe se casse au point ${hi.length} : c'est la frontière entre les projets de valeur élevée et les autres. Parmi les premiers, l'ordre ne dépend que de l'effort (du plus léger au plus lourd).`;
+  else {
+    const intrus = pts.filter(x => x.rank < maxHi && x.v < VAL_HAUTE);
+    h += `Pas de cassure nette : ${intrus.length > 1 ? 'des projets de valeur plus faible mais légers s\'intercalent' : 'un projet de valeur plus faible mais léger s\'intercale'} parmi ceux de valeur élevée
+      (${intrus.map(x => 'n° ' + x.rank).join(', ')}). Le dernier projet de valeur élevée est au rang ${maxHi}.`;
+  }
+  h += `</p>`;
+
+  // Répartition par priorité
+  const ordre = Object.keys(VAL_AUTO);
+  pts.forEach(x => { const k = x.p.prio || ''; if(!ordre.includes(k)) ordre.push(k); });
+  h += `<h4>Répartition par priorité</h4><table><tr><th>Priorité</th><th>Projets</th><th>Effort</th><th>% effort</th><th>% valeur</th></tr>`;
+  ordre.forEach(k => {
+    const a = pts.filter(x => (x.p.prio || '') === k);
+    h += a.length
+      ? `<tr><td>${k ? esc(k) : 'Non renseignée'}</td><td>${a.length}</td><td>${sE(a)}</td><td>${pc(sE(a),totE)} %</td><td>${pc(sV(a),totV)} %</td></tr>`
+      : `<tr><td>${esc(k)}</td><td>0</td><td>—</td><td>—</td><td>—</td></tr>`;
+  });
+  h += `</table>`;
+
+  // Capacité
+  if(hi.length){
+    const besoin = pts[maxHi-1].ce;      // la capacité se remplit dans l'ordre de la courbe
+    h += `<h4>Capacité</h4><p>Il faut <b>${besoin} points</b> pour couvrir tous les projets de valeur élevée${maxHi !== hi.length ? ` (dont ${besoin - sE(hi)} pts pour les projets intercalés)` : ''}.`;
+    if(cap) h += cap >= besoin ? ` La capacité saisie (${cap} pts) suffit, avec ${cap - besoin} pt${cap - besoin > 1 ? 's' : ''} de marge.`
+                               : ` La capacité saisie (${cap} pts) ne suffit pas : il manque ${besoin - cap} pt${besoin - cap > 1 ? 's' : ''}.`;
+    h += `</p>`;
+  }
+
+  // Projets à questionner
+  const aq = lo.filter(x => x.eff > med).sort((a,b) => b.eff - a.eff || b.rank - a.rank);
+  h += `<h4>Projets à questionner</h4><p>`;
+  h += aq.length ? `Valeur faible et effort au-dessus de la médiane (${med} pts) : ${aq.map(nomP).join(' ; ')}. Pistes : report, découpage ou réduction de périmètre.`
+                 : `Aucun projet de valeur faible avec un effort au-dessus de la médiane (${med} pts).`;
+  return h + `</p></div>`;
+}
+
 function vePareto(d){
   const l = d.planned.slice().sort((a,b) => b.ratio - a.ratio || b.v - a.v);
   const totE = l.reduce((t,x) => t + x.eff, 0), totV = l.reduce((t,x) => t + x.v, 0);
@@ -1766,7 +1835,8 @@ function vePareto(d){
   let g = `<div class="toolbar no-print" style="margin:0 0 8px">
       <div class="fg"><label>Capacité disponible (points d'effort)</label>
       <input type="number" id="vCap" min="0" step="1" value="${cap || ''}" placeholder="Total : ${totE}" style="width:170px; font:inherit; padding:6px 9px; border-radius:6px; border:1px solid #d3cdc3"></div>
-      <span class="hint" style="margin:0 0 6px">Facultatif : trace la limite de capacité et marque les projets au-delà.</span></div>
+      <span class="hint" style="margin:0 0 6px">Facultatif : trace la limite de capacité et marque les projets au-delà.</span>
+      <button id="vAna" class="${V.ana?'on':''}" aria-expanded="${V.ana}">Analyse</button></div>
     <div style="overflow-x:auto"><svg class="scatter" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Courbe de Pareto : valeur cumulée en fonction de l'effort cumulé">`;
   [0,25,50,75,100].forEach(p => {
     g += `<line x1="${ml}" y1="${Y(p)}" x2="${W-mr}" y2="${Y(p)}" stroke="#ece8e1"/>
@@ -1797,6 +1867,7 @@ function vePareto(d){
   if(k) g += `<line x1="${X(k.pe)}" y1="${Y(k.pv)}" x2="${X(k.pe)}" y2="${H-mb}" stroke="#2f5d8a" stroke-dasharray="2 3"/>
     <text x="${X(k.pe)+8}" y="${Y(k.pv)+16}" font-size="11" fill="#2a2d33">${Math.round(k.pv)} % de la valeur avec ${Math.round(k.pe)} % de l'effort</text>`;
   g += `</svg></div>`;
+  if(V.ana) g += veAnalyse(pts, totE, totV, d.med, cap);
   // tableau
   const inCap = cap ? pts.filter(p => p.ce <= cap) : pts;
   const vIn = inCap.reduce((t,p) => t + p.v, 0);
@@ -1821,6 +1892,7 @@ function bindVE(){
   }
   if(!veHelpKey){ veHelpKey = true;
     document.addEventListener('keydown', e => { if(e.key==='Escape' && V.help){ V.help = false; render(); } }); }
+  if($('#vAna')) $('#vAna').onclick = () => { V.ana = !V.ana; render(); };
   if($('#vCap')) $('#vCap').onchange = e => { V.cap = Math.max(0, Math.round(+e.target.value || 0)); render(); };
   $('#vG').onchange = e => { V.grp = +e.target.value; render(); };
   document.querySelectorAll('[data-sub]').forEach(b => b.onclick = () => { V.sub = b.dataset.sub; render(); });
