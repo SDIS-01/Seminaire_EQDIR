@@ -94,6 +94,11 @@
   .lvl-ok{background:var(--ok-bg); color:var(--ok);}
   .lvl-warn{background:var(--warn-bg); color:var(--warn);}
   .lvl-over{background:var(--over-bg); color:var(--over);}
+  .heat .occ{display:block; font-size:10px; font-weight:400;}
+  .quo{background:#fff; border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin-bottom:12px;}
+  .quo .row{display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;}
+  .quo input[type=number]{width:80px; font:inherit; padding:6px 9px; border-radius:6px; border:1px solid #d3cdc3;}
+  .quo .qerr{color:var(--over); font-size:12px; margin-top:6px;}
   .sub td{font-size:12px; background:#fafaf7;}
   .sub td:first-child{padding-left:22px;}
   .toggle{cursor:pointer;}
@@ -283,6 +288,9 @@
 <script>
 /* ================= Configuration ================= */
 const T = { GRP:'Groupement', COL:'Collaborateur', PRJ:'Projet', AFF:'Affectation' };
+const T_QUO = 'Quotidien';                        // facultative : Groupement (réf.), Trimestre (texte), Pourcentage
+const PT_PCT = 5;                                  // 1 point d'impact ≈ 5 % du temps d'un groupement sur un trimestre
+const OCC_ORANGE = 80, OCC_ROUGE = 100;            // occupation : vert < 80 %, orange 80–100 %, rouge > 100 %
 const T_COM = 'Commentaires';                     // journal : Affectation (réf.), Texte, Auteur, Date
 const Q = ['T1 - 2027','T2 - 2027','T3 - 2027','T4 - 2027'];
 const QS = ['T1','T2','T3','T4'];                 // libellés courts
@@ -298,6 +306,8 @@ const PALETTE = ['#2f5d8a','#9b2c2c','#2e7d5b','#6b4fa0','#b3621b','#1f7a7a','#7
 /* ================= État ================= */
 let grps=[], collabs=[], projets=[], affs=[], hasCollab=false, hasPrjCollab=false, hasPrio=false, hasDD=false, hasCom=false, hasJournal=false, journal=[];
 let seuil = SEUIL_DEFAUT;
+let hasQuo = false, quot = {};                     // quot[grp][trimestre] = {id, v}
+const QU = { grp:0, draft:null, err:'', help:false }; // saisie du quotidien (onglet Charge)
 let view = 'kanban';
 const F = { grp:0, col:0, prio:'', dd:'', txt:'' };  // filtres kanban : groupement, collaborateur
 let modalPrj = null;                                // id projet ouvert
@@ -366,6 +376,10 @@ const sum = arr => arr.reduce((s,a)=>s+pts(a),0);
 const chargeGrp = (g,q) => sum(affs.filter(a=>a.grp===g && a.q===q));
 const chargeCol = (c,q) => sum(affs.filter(a=>a.col===c && a.q===q));
 const lvl = v => v<=0 ? 'lvl-0' : !USE_SEUIL ? 'lvl-n' : v/seuil < .7 ? 'lvl-ok' : v<=seuil ? 'lvl-warn' : 'lvl-over';
+// Occupation d'un groupement sur un trimestre : null si le quotidien n'est pas saisi
+const quotOf = (g,q) => (quot[g] && quot[g][q]) ? quot[g][q].v : null;
+const occGrp = (g,q) => { const qv = quotOf(g,q); return qv === null ? null : qv + chargeGrp(g,q) * PT_PCT; };
+const lvlOcc = o => o < OCC_ORANGE ? 'lvl-ok' : o <= OCC_ROUGE ? 'lvl-warn' : 'lvl-over';
 const lvlColor = v => ({'lvl-0':'#cfcfcf','lvl-ok':'var(--ok)','lvl-warn':'var(--warn)','lvl-over':'var(--over)'})[lvl(v)];
 const fmtDate = v => {
   if(v === null || v === undefined || v === '') return '—';
@@ -390,12 +404,12 @@ async function loadAll(auto){
   const seq = ++loadSeq;
   try{
     const facultative = t => grist.docApi.fetchTable(t).catch(() => null);   // Commentaires, Actions, Taches
-    const [g,c,p,a,jc,ta,tt,smp,smr] = await Promise.all([
+    const [g,c,p,a,jc,ta,tt,smp,smr,qd] = await Promise.all([
       ...[T.GRP,T.COL,T.PRJ,T.AFF].map(t => grist.docApi.fetchTable(t)),
-      facultative(T_COM), facultative(T_ACT), facultative(T_TAC), facultative(T_SMP), facultative(T_SMR)]);
+      facultative(T_COM), facultative(T_ACT), facultative(T_TAC), facultative(T_SMP), facultative(T_SMR), facultative(T_QUO)]);
     if(seq !== loadSeq) return;
     if(auto && pending) return;                        // écriture en cours : on attend son rechargement
-    const sig = JSON.stringify([g,c,p,a,jc,ta,tt,smp,smr]);
+    const sig = JSON.stringify([g,c,p,a,jc,ta,tt,smp,smr,qd]);
     if(auto && sig === lastSig) return;               // rien n'a changé : pas de re-rendu
     lastSig = sig;
     grps = g.id.map((id,i)=>({id, nom:g.Groupement[i]||'(sans nom)'}));
@@ -422,6 +436,13 @@ async function loadAll(auto){
     hasCom = hasCom || hasJournal;
     loadActionsTaches(ta, tt);
     loadSM(smp, smr);
+    hasQuo = !!(qd && ['Groupement','Trimestre','Pourcentage'].every(k => k in qd));
+    quot = {};
+    if(hasQuo) qd.id.forEach((id,i) => {
+      const v = qd.Pourcentage[i];
+      if(v === null || v === '' || isNaN(+v)) return;
+      (quot[qd.Groupement[i]] ||= {})[qd.Trimestre[i]] = {id, v:+v};
+    });
     reindex();
     setStatus(hasCollab ? '' : "Colonne Affectation.Collaborateur absente : la distinction par collaborateur est désactivée.");
     render();
@@ -884,6 +905,7 @@ document.addEventListener('keydown', e => { if(e.key==='Escape' && modalPrj) clo
 function viewCharge(){
   let h = `<div class="toolbar no-print"><button id="cPrint" onclick="window.print()">Imprimer</button>
     <span class="hint" style="margin:0">Points par trimestre (faible = 1, fort = 2).${hasCollab?' Clic sur un groupement : détail par collaborateur (affectations nominatives).':''}</span></div>
+    ${quoForm()}
     <div class="sheet"><h2>Charge des groupements — 2027</h2><div class="meta">Édité le ${today()} </div>
     <table class="grid"><tr><th>Groupement</th>${QS.map(s=>`<th class="c">${s}</th>`).join('')}<th class="c">Projets</th></tr>`;
   grps.forEach(g => {
@@ -891,7 +913,11 @@ function viewCharge(){
     const nbPrj = new Set(affs.filter(a=>a.grp===g.id).map(a=>a.prj)).size;
     const members = collabs.filter(c=>c.grp===g.id);
     h += `<tr class="${hasCollab?'toggle':''}" data-g="${g.id}"><td>${hasCollab && members.length ? (open?'▾ ':'▸ '):''}<b>${esc(g.nom)}</b></td>`;
-    Q.forEach(q => { const v = chargeGrp(g.id,q); h += `<td class="heat ${lvl(v)}">${v || '·'}</td>`; });
+    Q.forEach(q => {
+      const v = chargeGrp(g.id,q), o = occGrp(g.id,q);
+      h += o === null ? `<td class="heat ${lvl(v)}">${v || '·'}</td>`
+        : `<td class="heat ${lvlOcc(o)}" title="Quotidien ${quotOf(g.id,q)} % + ${v} pt${v>1?'s':''} × ${PT_PCT} % = ${o} %">${v || '·'}<span class="occ">${o} %</span></td>`;
+    });
     h += `<td class="c">${nbPrj}</td></tr>`;
     if(hasCollab && open) members.forEach(c => {
       h += `<tr class="sub"><td>${esc(c.nom)}</td>`;
@@ -899,11 +925,63 @@ function viewCharge(){
       h += `<td class="c">${new Set(affs.filter(a=>a.col===c.id).map(a=>a.prj)).size}</td></tr>`;
     });
   });
-  h += `</table></div>`;
-  setTimeout(() => document.querySelectorAll('tr.toggle').forEach(tr => tr.onclick = () => {
+  h += `</table>`;
+  if(hasQuo) h += `<p class="legend">Quand le quotidien est saisi, la case affiche l'occupation : quotidien % + points × ${PT_PCT} %.
+    Vert : moins de ${OCC_ORANGE} % ; orange : de ${OCC_ORANGE} à ${OCC_ROUGE} % ; rouge : au-delà de ${OCC_ROUGE} %. Sans saisie, seuls les points sont affichés.</p>`;
+  h += `</div>`;
+  setTimeout(() => { document.querySelectorAll('tr.toggle').forEach(tr => tr.onclick = () => {
     const g = +tr.dataset.g; chargeOpen.has(g) ? chargeOpen.delete(g) : chargeOpen.add(g); render();
-  }));
+  }); bindQuo(); });
   return h;
+}
+
+// Saisie du quotidien (% par trimestre) pour un groupement
+function quoForm(){
+  if(!hasQuo) return `<p class="hint no-print">Pour saisir la part du quotidien de chaque groupement, créez la table <b>${T_QUO}</b>
+    avec les colonnes Groupement (référence vers Groupement), Trimestre (texte, par exemple « ${Q[0]} ») et Pourcentage (numérique).</p>`;
+  const saved = q => { const v = quotOf(QU.grp, q); return v === null ? '' : String(v); };
+  const vals = QU.draft || Q.map(saved);
+  return `<div class="quo no-print vehelp-wrap">
+    <div class="row">
+      <div class="fg"><label>Quotidien du groupement
+        <button class="vehelp-btn ${QU.help?'on':''}" id="quHelpBtn" style="width:20px; height:20px; font-size:11px; margin-left:4px" aria-label="Aide sur le quotidien" aria-expanded="${QU.help}">?</button></label>
+        <select id="quG">${opts(grps, QU.grp, [0,'Choisir un groupement'])}</select></div>
+      ${QU.grp ? Q.map((q,i) => `<div class="fg"><label>${QS[i]} (%)</label>
+        <input type="number" min="0" max="100" step="1" data-qi="${i}" value="${esc(vals[i])}" placeholder="—"></div>`).join('')
+        + `<button class="primary" id="quSave">Enregistrer</button>` : ''}
+    </div>
+    ${QU.err ? `<div class="qerr">${esc(QU.err)}</div>` : ''}
+    ${QU.help ? `<div class="vehelp" style="top:30px"><div class="vh-top"><b>Estimer le quotidien</b><button class="vh-x" id="quHelpX" aria-label="Fermer">×</button></div>
+      <p style="margin-top:6px">Estimez la part du temps de votre groupement consacrée au quotidien sur chaque trimestre (activité courante, demandes, interventions, gestion administrative…),
+      en retirant tout ce qui relève des projets et actions suivis dans ce planning. Dans les équipes de support ou de service, le quotidien représente couramment 60 à 80 % du temps.
+      Laissez vide si vous ne souhaitez pas l'estimer.</p>
+      <p style="margin-top:6px">Calcul : occupation = quotidien % + points d'impact × ${PT_PCT} % (faible = ${PT_PCT} %, fort = ${2*PT_PCT} %).</p></div>` : ''}
+  </div>`;
+}
+function bindQuo(){
+  if(!$('#quG')) return;
+  $('#quG').onchange = e => { QU.grp = +e.target.value; QU.draft = null; QU.err = ''; render(); };
+  $('#quHelpBtn').onclick = e => { e.preventDefault(); QU.help = !QU.help; render(); };
+  if($('#quHelpX')) $('#quHelpX').onclick = () => { QU.help = false; render(); };
+  document.querySelectorAll('.quo input[data-qi]').forEach(inp => inp.oninput = () => {
+    QU.draft = [...document.querySelectorAll('.quo input[data-qi]')].map(x => x.value);   // conservé si la vue se rafraîchit
+    if(QU.err){ QU.err = ''; const e = $('.quo .qerr'); if(e) e.remove(); }
+  });
+  if($('#quSave')) $('#quSave').onclick = saveQuo;
+}
+async function saveQuo(){
+  const g = QU.grp; if(!g) return;
+  const vals = [...document.querySelectorAll('.quo input[data-qi]')].map(x => x.value.trim());
+  if(vals.some(v => v !== '' && !(+v >= 0 && +v <= 100))){ QU.err = 'Saisissez un pourcentage entre 0 et 100, ou laissez la case vide.'; QU.draft = vals; render(); return; }
+  const actions = [];
+  Q.forEach((q,i) => {
+    const cur = quot[g] && quot[g][q], v = vals[i];
+    if(v === '') { if(cur) actions.push(['RemoveRecord', T_QUO, cur.id]); }
+    else if(!cur) actions.push(['AddRecord', T_QUO, null, {Groupement:g, Trimestre:q, Pourcentage:Math.round(+v)}]);
+    else if(cur.v !== Math.round(+v)) actions.push(['UpdateRecord', T_QUO, cur.id, {Pourcentage:Math.round(+v)}]);
+  });
+  QU.draft = null; QU.err = '';
+  if(actions.length) await act(actions); else render();
 }
 
 /* ================= États groupement / collaborateur ================= */
