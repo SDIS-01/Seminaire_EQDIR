@@ -448,7 +448,7 @@ async function loadAll(auto){
     if(hasQuo) qd.id.forEach((id,i) => {
       const v = qd.Pourcentage[i];
       if(v === null || v === '' || isNaN(+v)) return;
-      (quot[qd.Groupement[i]] ||= {})[qd.Trimestre[i]] = {id, v:+v};
+      (quot[qd.Groupement[i]] ||= {})[qd.Trimestre[i]] = {id, v:Math.round(+v*100)};   // colonne au format % : 0,5 = 50 %
     });
     reindex();
     if(!profilInit){ profilInit = true; setTimeout(initProfil); }
@@ -946,7 +946,7 @@ function viewCharge(){
 // Saisie du quotidien (% par trimestre) pour un groupement
 function quoForm(){
   if(!hasQuo) return `<p class="hint no-print">Pour saisir la part du quotidien de chaque groupement, créez la table <b>${T_QUO}</b>
-    avec les colonnes Groupement (référence vers Groupement), Trimestre (texte, par exemple « ${Q[0]} ») et Pourcentage (numérique).</p>`;
+    avec les colonnes Groupement (référence vers Groupement), Trimestre (texte, par exemple « ${Q[0]} ») et Pourcentage (numérique, format pourcentage : 0,5 = 50 %).</p>`;
   const saved = q => { const v = quotOf(QU.grp, q); return v === null ? '' : String(v); };
   const vals = QU.draft || Q.map(saved);
   return `<div class="quo no-print vehelp-wrap">
@@ -985,8 +985,8 @@ async function saveQuo(){
   Q.forEach((q,i) => {
     const cur = quot[g] && quot[g][q], v = vals[i];
     if(v === '') { if(cur) actions.push(['RemoveRecord', T_QUO, cur.id]); }
-    else if(!cur) actions.push(['AddRecord', T_QUO, null, {Groupement:g, Trimestre:q, Pourcentage:Math.round(+v)}]);
-    else if(cur.v !== Math.round(+v)) actions.push(['UpdateRecord', T_QUO, cur.id, {Pourcentage:Math.round(+v)}]);
+    else if(!cur) actions.push(['AddRecord', T_QUO, null, {Groupement:g, Trimestre:q, Pourcentage:Math.round(+v)/100}]);
+    else if(cur.v !== Math.round(+v)) actions.push(['UpdateRecord', T_QUO, cur.id, {Pourcentage:Math.round(+v)/100}]);
   });
   QU.draft = null; QU.err = '';
   if(actions.length) await act(actions); else render();
