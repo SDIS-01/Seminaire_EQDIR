@@ -1708,7 +1708,7 @@ function viewFresque(){
 /* ================= Valeur / effort ================= */
 // Valeur : score automatique selon la priorité (P1 = 3, P2 = 2, P3 = 1, Poursuite = 1), non modifiable.
 // Effort : somme des points d'impact du projet (faible = 1, fort = 2), tous groupements et trimestres.
-const V = { sub:'nuage', grp:0, cap:0, help:false, ana:false };   // ana : encadré Analyse (Pareto) ouvert   // help : bulle d'explication ouverte   // cap : capacité en points (0 = non définie)
+const V = { sub:'zones', grp:0, cap:{}, pq:'', help:false, ana:false };   // pq : période de la courbe de Pareto ('' = année, sinon un trimestre de Q)   // cap : capacité par période   // ana : encadré Analyse (Pareto) ouvert   // help : bulle d'explication ouverte   // cap : capacité en points (0 = non définie)
 const VAL_AUTO = { P1:3, P2:2, P3:1, Poursuite:1 };
 const VAL_HAUTE = 3;                                   // valeur ≥ 3 : valeur élevée
 const QD = {
@@ -1722,9 +1722,9 @@ const valeurOf = p => ({v:autoVal(p)});
 const qBadge = q => `<span class="qb ${QD[q].cls}">${QD[q].nom}</span>`;
 const vPill = x => `<span class="vpill" title="Valeur déduite de la priorité">V${x.v}</span>`;
 
-function veData(){
+function veData(q){                                   // q : trimestre (facultatif) — l'effort ne compte alors que ce trimestre
   const list = projets.filter(p => matchPD(p) && (!V.grp || p.porteur===V.grp)).map(p => {
-    const pa = affsOf(p.id);
+    const pa = q ? affsOf(p.id).filter(a => a.q===q) : affsOf(p.id);
     const vv = valeurOf(p);
     return {p, eff:sum(pa), v:vv.v, ng:new Set(pa.map(a=>a.grp)).size};
   });
@@ -1745,15 +1745,18 @@ function veHelp(){
     <h4>Valeur</h4><p>Déduite de la priorité du projet : P1 = ${VAL_AUTO.P1}, P2 = ${VAL_AUTO.P2}, P3 = ${VAL_AUTO.P3}, Poursuite = ${VAL_AUTO.Poursuite}. Valeur <b>élevée à partir de ${VAL_HAUTE}</b>.</p>
     <h4>Effort</h4><p>Somme des points d'impact du projet dans le P2A, tous groupements et trimestres : faible = 1, fort = 2. Sans impact planifié : effort nul, projet hors matrice.</p>
     <h4>Quadrants</h4><p>${[1,2,3,4].map(q => `<span class="q" style="background:${QD[q].col}1f; color:${QD[q].col}">${QD[q].nom}</span>`).join('')}</p>
-    <h4>Rendement = valeur ÷ effort</h4><p>Sert au classement (tiers vert / orange / rouge) et à la courbe de Pareto (cumuls dans l'ordre du rendement).</p>
+    <h4>Rendement = valeur ÷ effort</h4><p>Sert au classement (tiers vert / orange / rouge) et à la courbe de Pareto (cumuls dans l'ordre du rendement).
+      Sur la courbe de Pareto, la période peut être restreinte à un trimestre : l'effort ne compte alors que les impacts de ce trimestre (médiane recalculée), la valeur reste celle de la priorité.</p>
     <p class="vh-ex"><i>Exemple : projet P2, impact fort sur 2 groupements au T1 et faible sur 1 au T2 → valeur 2, effort 2 + 2 + 1 = 5, rendement 0,40.</i></p>
   </div>`;
 }
 let veHelpKey = false;
 
 function viewVE(){
-  const d = veData();
-  const subs = [['nuage','Nuage de points'],['zones','Zones de cartes'],['classement','Classement par rendement'],['pareto','Courbe de Pareto']];
+  if(!['zones','classement','pareto'].includes(V.sub)) V.sub = 'zones';
+  const pq = V.sub==='pareto' && Q.includes(V.pq) ? V.pq : '';
+  const d = veData(pq);
+  const subs = [['zones','Zones de cartes'],['classement','Classement par rendement'],['pareto','Courbe de Pareto']];
   let h = `<div class="toolbar no-print">
     <div class="fg"><label>Groupement porteur</label><select id="vG">${opts(grps, V.grp, [0,'Tous'])}</select></div>
     ${pdFilters()}
@@ -1762,59 +1765,19 @@ function viewVE(){
     <div class="subtabs" style="align-items:center">${subs.map(([k,l]) => `<button class="subtab ${V.sub===k?'on':''}" data-sub="${k}">${l}</button>`).join('')}
       <button class="vehelp-btn ${V.help?'on':''}" id="vHelpBtn" aria-label="Comment est calculé le classement ?" title="Comment est calculé le classement ?" aria-expanded="${V.help}">?</button></div>
     ${V.help ? veHelp() : ''}</div>`;
-  h += `<div class="sheet"><h2>Valeur / effort — ${esc(subs.find(x=>x[0]===V.sub)[1])}</h2>
-    <div class="meta">${V.grp ? 'Porteur ' + esc(gName(V.grp)) : 'Tous les porteurs'} — ${d.planned.length} projet(s) planifié(s) — effort médian ${d.med} pt(s) — édité le ${today()}</div>`;
-  if(!d.planned.length) h += `<p class="empty">Aucun projet planifié ne correspond aux filtres.</p>`;
-  else if(V.sub==='nuage') h += veNuage(d);
+  h += `<div class="sheet"><h2>Valeur / effort — ${esc(subs.find(x=>x[0]===V.sub)[1])}${pq ? ' — ' + esc(pq) : ''}</h2>
+    <div class="meta">${V.grp ? 'Porteur ' + esc(gName(V.grp)) : 'Tous les porteurs'} — ${pq ? 'effort du trimestre ' + esc(pq) : 'effort sur l\'année'} — ${d.planned.length} projet(s) planifié(s) — effort médian ${d.med} pt(s) — édité le ${today()}</div>`;
+  if(V.sub==='pareto') h += veParetoBar(d, pq);
+  if(!d.planned.length) h += `<p class="empty">Aucun projet planifié ne correspond aux filtres${pq ? ' sur ' + esc(pq) : ''}.</p>`;
   else if(V.sub==='zones') h += veZones(d);
   else if(V.sub==='classement') h += veClassement(d);
-  else h += vePareto(d);
-  if(d.unplanned.length) h += `<p class="legend">Non planifiés (effort nul, hors matrice) : ${d.unplanned.map(x => esc(x.p.nom)).join(' ; ')}</p>`;
+  else h += vePareto(d, pq);
+  if(d.unplanned.length) h += `<p class="legend">${pq ? 'Sans impact sur ' + esc(pq) : 'Non planifiés'} (effort nul, hors matrice) : ${d.unplanned.map(x => esc(x.p.nom)).join(' ; ')}</p>`;
   h += `<p class="legend">Valeur : P1 = ${VAL_AUTO.P1}, P2 = ${VAL_AUTO.P2}, P3 = ${VAL_AUTO.P3}, Poursuite = ${VAL_AUTO.Poursuite} ; valeur élevée à partir de ${VAL_HAUTE}.
     Effort : somme des points d'impact (faible = 1, fort = 2) ; élevé au-delà de la médiane (${d.med}).
     ${V.sub!=='classement' ? 'Clic sur un projet : ouvrir sa fiche.' : ''}</p></div>`;
   setTimeout(bindVE);
   return h;
-}
-
-function veNuage(d){
-  const W = 900, H = 470, ml = 50, mr = 20, mt = 20, mb = 45;
-  const maxE = Math.max(...d.planned.map(x => x.eff)) + 1;
-  const X = e => ml + e/maxE * (W-ml-mr);
-  const Y = v => mt + (4.5 - v)/4 * (H-mt-mb);
-  const xm = X(d.med + .5), ym = Y(VAL_HAUTE - .5);
-  // décalage des points superposés
-  const seen = {};
-  const pts = d.planned.slice().sort((a,b) => b.ng - a.ng).map(x => {
-    const k = x.eff + '|' + x.v, n = seen[k] = (seen[k]||0) + 1;
-    const ang = n * 2.4, rad = n > 1 ? 9 * Math.sqrt(n-1) : 0;
-    return {...x, cx: X(x.eff) + rad*Math.cos(ang), cy: Y(x.v) + rad*Math.sin(ang), r: Math.min(18, 6 + 2*x.ng)};
-  });
-  let g = `<div style="overflow-x:auto"><svg class="scatter" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Nuage de points valeur en fonction de l'effort">
-    <rect x="${ml}" y="${mt}" width="${xm-ml}" height="${ym-mt}" fill="#e3f3ea"/>
-    <rect x="${xm}" y="${mt}" width="${W-mr-xm}" height="${ym-mt}" fill="#e3ecf7"/>
-    <rect x="${ml}" y="${ym}" width="${xm-ml}" height="${H-mb-ym}" fill="#fbf0d8"/>
-    <rect x="${xm}" y="${ym}" width="${W-mr-xm}" height="${H-mb-ym}" fill="#f6e2e0"/>
-    <text x="${ml+8}" y="${mt+16}" font-size="12" font-weight="600" fill="#1f5e3d">1. Gains rapides</text>
-    <text x="${W-mr-8}" y="${mt+16}" font-size="12" font-weight="600" fill="#244a73" text-anchor="end">2. Projets majeurs</text>
-    <text x="${ml+8}" y="${H-mb-8}" font-size="12" font-weight="600" fill="#6e4a00">3. Opportunités</text>
-    <text x="${W-mr-8}" y="${H-mb-8}" font-size="12" font-weight="600" fill="#7d1f17" text-anchor="end">4. À éviter</text>
-    <line x1="${ml}" y1="${H-mb}" x2="${W-mr}" y2="${H-mb}" stroke="#9a938a"/>
-    <line x1="${ml}" y1="${mt}" x2="${ml}" y2="${H-mb}" stroke="#9a938a"/>`;
-  for(let e = 0; e < maxE; e += Math.max(1, Math.ceil(maxE/12)))
-    g += `<text x="${X(e)}" y="${H-mb+14}" font-size="10" fill="#6f6a63" text-anchor="middle">${e}</text>`;
-  [1,2,3,4].forEach(v => g += `<text x="${ml-8}" y="${Y(v)+3}" font-size="10" fill="#6f6a63" text-anchor="end">V${v}</text>`);
-  g += `<text x="${(ml+W-mr)/2}" y="${H-8}" font-size="11" fill="#6f6a63" text-anchor="middle">Effort (points d'impact)</text>
-    <text x="14" y="${(mt+H-mb)/2}" font-size="11" fill="#6f6a63" text-anchor="middle" transform="rotate(-90 14 ${(mt+H-mb)/2})">Valeur</text>`;
-  pts.forEach(x => {
-    const lbl = x.p.nom.length > 26 ? x.p.nom.slice(0,25) + '…' : x.p.nom;
-    g += `<g class="pt" data-vprj="${x.p.id}" tabindex="0">
-      <title>${esc(x.p.nom)} — porteur ${esc(gName(x.p.porteur))} — valeur ${x.v} — effort ${x.eff} — ${x.ng} groupement(s) impacté(s)</title>
-      <circle cx="${x.cx.toFixed(1)}" cy="${x.cy.toFixed(1)}" r="${x.r}" fill="${gColor(x.p.porteur)}" fill-opacity=".8" stroke="#fff" stroke-width="1.5"/>
-      <text x="${(x.cx + x.r + 3).toFixed(1)}" y="${(x.cy + 3).toFixed(1)}" font-size="10" fill="#2a2d33">${esc(lbl)}</text></g>`;
-  });
-  g += `</svg></div><p class="legend">Couleur : groupement porteur ; taille : nombre de groupements impactés. Survol : détail du projet.</p>`;
-  return g;
 }
 
 function veZones(d){
@@ -1911,20 +1874,29 @@ function veAnalyse(pts, totE, totV, med, cap){
   return h + `</p></div>`;
 }
 
-function vePareto(d){
+// Barre d'outils de la courbe de Pareto : période (année / trimestre), capacité de la période, analyse
+function veParetoBar(d, pq){
+  const totE = d.planned.reduce((t,x) => t + x.eff, 0);
+  const cap = V.cap[pq] > 0 ? V.cap[pq] : 0;
+  return `<div class="toolbar no-print" style="margin:0 0 8px">
+      <div class="fg"><label>Période</label><select id="vPq">
+        <option value="" ${!pq?'selected':''}>Année complète</option>${Q.map(q => `<option value="${esc(q)}" ${pq===q?'selected':''}>${esc(q)}</option>`).join('')}</select></div>
+      <div class="fg"><label>Capacité ${pq ? 'du trimestre' : 'annuelle'} (points d'effort)</label>
+      <input type="number" id="vCap" min="0" step="1" value="${cap || ''}" placeholder="Total : ${totE}" style="width:170px; font:inherit; padding:6px 9px; border-radius:6px; border:1px solid #d3cdc3"></div>
+      <span class="hint" style="margin:0 0 6px">Facultatif : trace la limite de capacité et marque les projets au-delà.</span>
+      <button id="vAna" class="${V.ana?'on':''}" aria-expanded="${V.ana}">Analyse</button></div>`;
+}
+
+function vePareto(d, pq){
   const l = d.planned.slice().sort((a,b) => b.ratio - a.ratio || b.v - a.v);
   const totE = l.reduce((t,x) => t + x.eff, 0), totV = l.reduce((t,x) => t + x.v, 0);
   let ce = 0, cv = 0;
   const pts = l.map((x,i) => { ce += x.eff; cv += x.v; return {...x, rank:i+1, ce, cv, pe:ce/totE*100, pv:cv/totV*100}; });
-  const cap = V.cap > 0 ? V.cap : 0;
+  const cap = V.cap[pq] > 0 ? V.cap[pq] : 0;
   const W = 900, H = 420, ml = 55, mr = 35, mt = 25, mb = 45;
   const X = p => ml + p/100*(W-ml-mr), Y = p => H-mb - p/100*(H-mt-mb);
-  let g = `<div class="toolbar no-print" style="margin:0 0 8px">
-      <div class="fg"><label>Capacité disponible (points d'effort)</label>
-      <input type="number" id="vCap" min="0" step="1" value="${cap || ''}" placeholder="Total : ${totE}" style="width:170px; font:inherit; padding:6px 9px; border-radius:6px; border:1px solid #d3cdc3"></div>
-      <span class="hint" style="margin:0 0 6px">Facultatif : trace la limite de capacité et marque les projets au-delà.</span>
-      <button id="vAna" class="${V.ana?'on':''}" aria-expanded="${V.ana}">Analyse</button></div>
-    <div style="overflow-x:auto"><svg class="scatter" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Courbe de Pareto : valeur cumulée en fonction de l'effort cumulé">`;
+  let g = `
+    <div style="overflow-x:auto"><svg class="scatter" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Courbe de Pareto : valeur cumulée en fonction de l'effort cumulé${pq ? ' — ' + esc(pq) : ''}">`;
   [0,25,50,75,100].forEach(p => {
     g += `<line x1="${ml}" y1="${Y(p)}" x2="${W-mr}" y2="${Y(p)}" stroke="#ece8e1"/>
       <text x="${ml-8}" y="${Y(p)+3}" font-size="10" fill="#6f6a63" text-anchor="end">${p} %</text>
@@ -1933,7 +1905,7 @@ function vePareto(d){
   g += `<line x1="${ml}" y1="${H-mb}" x2="${W-mr}" y2="${H-mb}" stroke="#9a938a"/>
     <line x1="${ml}" y1="${mt}" x2="${ml}" y2="${H-mb}" stroke="#9a938a"/>
     <line x1="${X(0)}" y1="${Y(0)}" x2="${X(100)}" y2="${Y(100)}" stroke="#b9b2a6" stroke-dasharray="4 4"/>
-    <text x="${(ml+W-mr)/2}" y="${H-8}" font-size="11" fill="#6f6a63" text-anchor="middle">Effort cumulé (${totE} pts au total)</text>
+    <text x="${(ml+W-mr)/2}" y="${H-8}" font-size="11" fill="#6f6a63" text-anchor="middle">Effort cumulé${pq ? ' sur ' + esc(pq) : ''} (${totE} pts au total)</text>
     <text x="16" y="${(mt+H-mb)/2}" font-size="11" fill="#6f6a63" text-anchor="middle" transform="rotate(-90 16 ${(mt+H-mb)/2})">Valeur cumulée</text>`;
   // zone hors capacité
   if(cap && cap < totE){
@@ -1980,7 +1952,8 @@ function bindVE(){
   if(!veHelpKey){ veHelpKey = true;
     document.addEventListener('keydown', e => { if(e.key==='Escape' && V.help){ V.help = false; render(); } }); }
   if($('#vAna')) $('#vAna').onclick = () => { V.ana = !V.ana; render(); };
-  if($('#vCap')) $('#vCap').onchange = e => { V.cap = Math.max(0, Math.round(+e.target.value || 0)); render(); };
+  if($('#vCap')) $('#vCap').onchange = e => { V.cap[Q.includes(V.pq) ? V.pq : ''] = Math.max(0, Math.round(+e.target.value || 0)); render(); };
+  if($('#vPq')) $('#vPq').onchange = e => { V.pq = e.target.value; render(); };
   $('#vG').onchange = e => { V.grp = +e.target.value; render(); };
   document.querySelectorAll('[data-sub]').forEach(b => b.onclick = () => { V.sub = b.dataset.sub; render(); });
   document.querySelectorAll('[data-vprj]').forEach(el => {
