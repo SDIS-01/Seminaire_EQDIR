@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <title>Planning projets 2027</title>
-<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<script src="https://grist.numerique.gouv.fr/grist-plugin-api.js"></script>
+<script>window.grist || document.write('<script src="https://docs.getgrist.com/grist-plugin-api.js"><\/script>');</script>
 <style>
   :root{
     --table:#2a2d33; --table-dark:#3a3e46; --red:#b42318; --red-bg:#fde7e5;
@@ -30,6 +31,9 @@
   .toolbar{display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:12px;}
   .fg{display:flex; flex-direction:column; gap:3px;} .fg label{font-size:11px; color:var(--muted);}
   .status{padding:8px 14px; color:var(--muted);} .status.err{color:var(--over);}
+  .net{display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:7px 14px; font-size:13px; border-bottom:1px solid var(--line);}
+  .net.off{background:#fdecea; color:#8c1d14;} .net.send{background:#fff6e0; color:#6b4a00;} .net.rej{background:#fdecea; color:#8c1d14;}
+  .net button{padding:3px 8px; font-size:12px;}
   .hint{font-size:11px; color:var(--muted); margin:8px 0 0;}
 
   /* Kanban */
@@ -284,6 +288,7 @@
   </div>
 </header>
 <div id="smbar" class="no-print" style="display:none"></div>
+<div id="net" class="net no-print" style="display:none" role="status" aria-live="polite"></div>
 <div id="status" class="status">Connexion à Grist…</div>
 <main id="app"></main>
 <div id="modal"></div>
@@ -321,7 +326,6 @@ let modalPrj = null;                                // id projet ouvert
 let chargeOpen = new Set();
 const E = { type:'grp', id:'all', prj:'all' };      // sélection des états
 let loadSeq = 0;
-let pending = 0;                                    // écritures en cours (affichage anticipé)
 const K = { sort:'prio', compact:false, todoOpen:true, focus:'', view:'std', pg:0, ig:0, ic:0, pool:'todo' };   // options du kanban
 let lastSig = '';                                   // signature des données affichées
 let dragging = false;
@@ -405,20 +409,129 @@ function setStatus(msg, err){ const s=$('#status'); s.textContent=msg||''; s.cla
 
 /* ================= Grist ================= */
 grist.ready({ requiredAccess:'full' });
-grist.onRecords(() => loadAll());
+// Les modifications faites par les autres arrivent souvent en rafale : un seul rechargement après 1,5 s de calme
+let recTimer = null;
+grist.onRecords(() => { clearTimeout(recTimer); recTimer = setTimeout(() => loadAll(true), 1500); });
+
+/* ================= Réseau : délais maximaux, copie locale, file d'attente ================= */
+// Toute modification du planning passe par une file conservée sur le poste. Chaque élément décrit
+// une intention (« déplacer tel projet de T1 vers T2 pour tel groupement ») et non une ligne précise :
+// au moment de l'envoi, l'intention est recalculée sur les données à jour du serveur. Cela évite
+// les doublons quand deux personnes font la même chose, et un renvoi après coupure ne crée rien en double.
+const NET_TIMEOUT_FETCH = 15000, NET_TIMEOUT_WRITE = 20000;
+class NetTimeout extends Error { constructor(){ super('Pas de réponse du serveur (connexion instable)'); this.net = true; } }
+const withTimeout = (pr, ms) => new Promise((res, rej) => {
+  const t = setTimeout(() => rej(new NetTimeout()), ms);
+  Promise.resolve(pr).then(v => { clearTimeout(t); res(v); }, e => { clearTimeout(t); rej(e); });
+});
+const gFetch = t => withTimeout(grist.docApi.fetchTable(t), NET_TIMEOUT_FETCH);
+const gApply = a => withTimeout(grist.docApi.applyUserActions(a), NET_TIMEOUT_WRITE);
+const isNetErr = e => !!(e && (e.net || !navigator.onLine ||
+  /time.?out|connect|network|socket|offline|disconnect/i.test(String(e.message || e))));
+// Stockage du poste (repli en mémoire si le navigateur le bloque)
+const ST = {};
+const stGet = k => { try{ const v = localStorage.getItem(k); if(v !== null) return v; }catch(e){} return k in ST ? ST[k] : null; };
+const stSet = (k, v) => { try{ localStorage.setItem(k, v); delete ST[k]; }catch(e){ ST[k] = v; } };
+let docKey = 'planning2027';
+let OUTBOX = [];                                    // modifications en attente d'envoi
+let flushing = false, flushTimer = null, flushDelay = 2000;
+let serverLoaded = false, displayed = false, retryTimer = null;
+const NET = { online:true, lastOk:null, fromCache:false, rejected:[] };
+const saveOutbox = () => stSet(docKey + ':outbox', JSON.stringify(OUTBOX));
+const writeCache = raw => stSet(docKey + ':cache', JSON.stringify({t:Date.now(), raw}));
+const readCache = () => { try{ return JSON.parse(stGet(docKey + ':cache') || 'null'); }catch(e){ return null; } };
+const hhmm = t => t ? new Date(t).toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'}) : '—';
+
+async function netInit(){
+  try{ const id = await withTimeout(grist.docApi.getDocName(), 5000); if(id) docKey = 'planning2027:' + id; }catch(e){}
+  let saved = [];
+  try{ saved = JSON.parse(stGet(docKey + ':outbox') || '[]'); }catch(e){}
+  if(Array.isArray(saved) && saved.length){ OUTBOX = [...saved, ...OUTBOX]; saveOutbox(); }
+  window.addEventListener('online', () => { loadAll(true); flush(); });
+  window.addEventListener('offline', () => { NET.online = false; netBar(); });
+  setTimeout(async () => { await pollSeance(); smSchedule(); }, 1500);
+  await loadAll();
+}
+
+// Bandeau d'état de la connexion
+function netBar(){
+  const b = $('#net'); if(!b) return;
+  const n = OUTBOX.length, mods = n > 1 ? `${n} modifications` : `${n} modification`;
+  let cls = '', h = '';
+  if(!NET.online || NET.fromCache){
+    cls = 'off';
+    h = `<b>Connexion perdue.</b> <span>Données du ${hhmm(NET.lastOk)}.</span>`
+      + (n ? ` <span>${mods} en attente : ${n>1?'elles seront envoyées':'elle sera envoyée'} automatiquement au retour du réseau. Ne fermez pas le navigateur.</span>`
+           : ` <span>Vous pouvez continuer : vos modifications seront envoyées au retour du réseau.</span>`)
+      + ` <button id="netRetry">Réessayer</button>`;
+  } else if(n){
+    cls = 'send'; h = `<span>Envoi de ${mods}…</span>`;
+  }
+  if(NET.rejected.length){
+    const r = NET.rejected.length;
+    h += `${h ? ' ' : ''}<span><b>${r} modification${r>1?'s':''} non appliquée${r>1?'s':''}</b> (modifiée${r>1?'s':''} entre-temps par quelqu'un d'autre ou refusée${r>1?'s':''}).</span>
+      <button id="netDet">Voir le détail</button> <button id="netClr">Masquer</button>`;
+    if(!cls) cls = 'rej';
+  }
+  b.className = 'net no-print ' + cls; b.innerHTML = h; b.style.display = h ? 'flex' : 'none';
+  if($('#netRetry')) $('#netRetry').onclick = () => { flushDelay = 2000; loadAll(); flush(); };
+  if($('#netDet')) $('#netDet').onclick = () => alert('Modifications non appliquées :\n\n' + NET.rejected.map(x => '• ' + x).join('\n'));
+  if($('#netClr')) $('#netClr').onclick = () => { NET.rejected = []; netBar(); };
+}
+
+// Commentaire consolidé (ancien commentaire + journal), utilisé par tous les affichages
+function recom(x){
+  x.com = [x.old ? x.old : '', ...(x.jr||[]).map(e => `${e.auteur||'?'} (${fmtDate(e.date)}) : ${e.txt}`)].filter(Boolean).join('\n');
+}
+function buildJournal(jc){
+  return (jc && 'Affectation' in jc && 'Texte' in jc) ? jc.id.map((id,i)=>({id, aff:jc.Affectation[i], txt:(jc.Texte[i]||'').trim(),
+    auteur: jc.Auteur ? (jc.Auteur[i]||'') : '', date: jc.Date ? jc.Date[i] : null}))
+    .filter(e=>e.aff && e.txt).sort((x,y)=>(x.date||0)-(y.date||0) || x.id-y.id) : [];
+}
+function buildAffs(a, jr){
+  const wCol = 'Collaborateur' in a, wCom = 'Commentaire' in a;
+  const L = a.id.map((id,i)=>({id, prj:a.Projet[i], grp:a.Groupement[i], col:wCol ? (a.Collaborateur[i]||0) : 0,
+                               q:a.Trimestre[i], imp:a.Impact[i], old: wCom ? (a.Commentaire[i]||'').trim() : ''}));
+  L.forEach(x => { x.jr = jr.filter(e=>e.aff===x.id); recom(x); });
+  return L;
+}
 
 async function loadAll(auto){
   const seq = ++loadSeq;
+  let raw;
   try{
-    const facultative = t => grist.docApi.fetchTable(t).catch(() => null);   // Commentaires, Actions, Taches
-    const [g,c,p,a,jc,ta,tt,smp,smr,qd] = await Promise.all([
-      ...[T.GRP,T.COL,T.PRJ,T.AFF].map(t => grist.docApi.fetchTable(t)),
+    const facultative = t => gFetch(t).catch(e => { if(isNetErr(e)) throw e; return null; });   // tables facultatives
+    raw = await Promise.all([
+      ...[T.GRP,T.COL,T.PRJ,T.AFF].map(t => gFetch(t)),
       facultative(T_COM), facultative(T_ACT), facultative(T_TAC), facultative(T_SMP), facultative(T_SMR), facultative(T_QUO)]);
+  }catch(err){
     if(seq !== loadSeq) return;
-    if(auto && pending) return;                        // écriture en cours : on attend son rechargement
-    const sig = JSON.stringify([g,c,p,a,jc,ta,tt,smp,smr,qd]);
-    if(auto && sig === lastSig) return;               // rien n'a changé : pas de re-rendu
-    lastSig = sig;
+    console.error(err);
+    if(!isNetErr(err)){ setStatus(`Chargement impossible. Vérifiez les tables ${Object.values(T).join(', ')} et l'accès complet du widget.`, true); return; }
+    NET.online = false;
+    if(!displayed){
+      const c = readCache();
+      if(c && c.raw){ NET.fromCache = true; NET.lastOk = c.t; ingest(c.raw); }
+      else setStatus('Connexion à Grist impossible pour le moment. Nouvel essai automatique…', true);
+      clearTimeout(retryTimer); retryTimer = setTimeout(() => loadAll(true), 5000);
+    }
+    netBar();
+    return;
+  }
+  if(seq !== loadSeq) return;
+  const first = !serverLoaded;
+  NET.online = true; NET.lastOk = Date.now(); NET.fromCache = false; serverLoaded = true;
+  if(OUTBOX.length && !flushing) flush();                           // renvoi des modifications en attente
+  if(auto && flushing && displayed){ netBar(); return; }           // envoi en cours : rechargement après
+  const sig = JSON.stringify(raw);
+  if(auto && !first && sig === lastSig){ netBar(); return; }        // rien n'a changé : pas de re-rendu
+  lastSig = sig;
+  writeCache(raw);
+  ingest(raw);
+  netBar();
+}
+function ingest([g,c,p,a,jc,ta,tt,smp,smr,qd]){
+  try{
     grps = g.id.map((id,i)=>({id, nom:g.Groupement[i]||'(sans nom)'}));
     collabs = c.id.map((id,i)=>({id, nom:c.Collaborateur[i]||'(sans nom)', grp:c.Groupement[i]}))
                .sort((x,y)=>x.nom.localeCompare(y.nom,'fr'));
@@ -430,16 +543,8 @@ async function loadAll(auto){
                .sort((x,y)=>x.nom.localeCompare(y.nom,'fr'));
     hasCollab = 'Collaborateur' in a; hasCom = 'Commentaire' in a;
     hasJournal = !!(jc && 'Affectation' in jc && 'Texte' in jc);
-    journal = hasJournal ? jc.id.map((id,i)=>({id, aff:jc.Affectation[i], txt:(jc.Texte[i]||'').trim(),
-                  auteur: jc.Auteur ? (jc.Auteur[i]||'') : '', date: jc.Date ? jc.Date[i] : null}))
-                  .filter(e=>e.aff && e.txt).sort((x,y)=>(x.date||0)-(y.date||0) || x.id-y.id) : [];
-    affs = a.id.map((id,i)=>({id, prj:a.Projet[i], grp:a.Groupement[i], col:hasCollab ? (a.Collaborateur[i]||0) : 0,
-                              q:a.Trimestre[i], imp:a.Impact[i], old: hasCom ? (a.Commentaire[i]||'').trim() : ''}));
-    // Texte de commentaire consolidé (ancien commentaire + journal), utilisé par tous les affichages
-    affs.forEach(x => {
-      x.jr = journal.filter(e=>e.aff===x.id);
-      x.com = [x.old ? x.old : '', ...x.jr.map(e => `${e.auteur||'?'} (${fmtDate(e.date)}) : ${e.txt}`)].filter(Boolean).join('\n');
-    });
+    journal = buildJournal(jc);
+    affs = buildAffs(a, journal);
     hasCom = hasCom || hasJournal;
     loadActionsTaches(ta, tt);
     loadSM(smp, smr);
@@ -450,7 +555,10 @@ async function loadAll(auto){
       if(v === null || v === '' || isNaN(+v)) return;
       (quot[qd.Groupement[i]] ||= {})[qd.Trimestre[i]] = {id, v:Math.round(+v*100)};   // colonne au format % : 0,5 = 50 %
     });
+    // Les modifications pas encore envoyées restent visibles par-dessus les données reçues
+    OUTBOX.forEach(o => { try{ applyLocal(o); }catch(e){ console.error(e); } });
     reindex();
+    displayed = true;
     if(!profilInit){ profilInit = true; setTimeout(initProfil); }
     setStatus(hasCollab ? '' : "Colonne Affectation.Collaborateur absente : la distinction par collaborateur est désactivée.");
     render();
@@ -459,19 +567,151 @@ async function loadAll(auto){
     setStatus(`Chargement impossible. Vérifiez les tables ${Object.values(T).join(', ')} et l'accès complet du widget.`, true);
   }
 }
+
+// Écritures d'administration (synchronisation, speed meeting…) : immédiates, non mises en file
 async function act(actions){
   if(!actions.length) return;
-  try{ const r = await grist.docApi.applyUserActions(actions); await loadAll(); return r; }
-  catch(err){ console.error(err); setStatus("Écriture refusée : " + err.message, true); }
+  try{ const r = await gApply(actions); await loadAll(); return r; }
+  catch(err){
+    console.error(err);
+    setStatus(isNetErr(err) ? "Modification non enregistrée : connexion indisponible. Réessayez quand le réseau sera revenu."
+                            : "Écriture refusée : " + err.message, true);
+    loadAll(true);
+  }
 }
-// Applique d'abord la modification à l'écran, puis l'enregistre ; recharge dans tous les cas
-async function actOpt(actions, local){
-  if(!actions.length) return;
-  pending++;
-  try{ local(); reindex(); render(); }catch(e){ console.error(e); }
-  try{ await grist.docApi.applyUserActions(actions); }
-  catch(err){ console.error(err); setStatus("Écriture refusée : " + err.message, true); }
-  pending--;
+
+// ---- Modifications du planning (file d'attente) ----
+// k : 'add' (créer si absente), 'rm' (retirer), 'imp' (changer l'impact), 'mv' (changer de trimestre),
+//     'com' (commentaire), 'quo' (quotidien d'un groupement)
+const opOf = (k, a, extra) => Object.assign({k, prj:a.prj, grp:a.grp, col:a.col||0, q:a.q}, extra || {});
+const uniq = ops => [...new Map(ops.map(o => [JSON.stringify(o), o])).values()];
+const rmFrom = (L, items) => { for(let i = L.length - 1; i >= 0; i--) if(items.includes(L[i])) L.splice(i, 1); };
+const sameKey = (a, o) => a.prj===o.prj && a.grp===o.grp && (a.col||0)===(o.col||0);
+function opLabel(o){
+  if(o.k==='quo') return `Quotidien de ${gName(o.g)}`;
+  const verbe = {add:'Ajout', rm:'Retrait', imp:'Impact', mv:'Déplacement', com:'Commentaire'}[o.k] || o.k;
+  return `${verbe} : ${(pObj(o.prj)||{}).nom || 'projet ' + o.prj} — ${gName(o.grp)}${o.col ? ' / ' + cName(o.col) : ''} — ${o.k==='mv' ? o.from + ' → ' + o.to : o.q}`;
+}
+// Calcule, pour une modification, les actions Grist et leur effet sur la liste L (modifiée sur place par fx)
+function planOp(o, L){
+  const acts = [], fx = [];
+  const at = q => L.filter(a => sameKey(a, o) && a.q===q);
+  if(o.k==='add'){
+    if(!at(o.q).length){ acts.push(addAff(o.prj, o.grp, o.col, o.q, o.imp)); fx.push(() => L.push(tmpAff(o.prj, o.grp, o.col, o.q, o.imp))); }
+  }
+  else if(o.k==='rm'){
+    const M = at(o.q);
+    if(M.length){ acts.push(...rmAffs(M).filter(x => x[2] > 0)); fx.push(() => rmFrom(L, M)); }
+  }
+  else if(o.k==='imp'){
+    const M = L.filter(a => a.prj===o.prj && a.grp===o.grp && (o.col == null || (a.col||0)===(o.col||0)) && a.q===o.q && a.imp!==o.imp);
+    M.forEach(a => { if(a.id > 0) acts.push(['UpdateRecord', T.AFF, a.id, {Impact:o.imp}]); });
+    if(M.length) fx.push(() => M.forEach(a => a.imp = o.imp));
+  }
+  else if(o.k==='mv'){
+    const s = at(o.from)[0], dup = at(o.to)[0];
+    if(!s){ if(!dup) acts.conflict = true; }           // déjà déplacée (renvoi) ou supprimée entre-temps
+    else if(dup){
+      if(s.old && s.old !== dup.old) acts.push(['UpdateRecord', T.AFF, dup.id, {Commentaire: dup.old ? dup.old + '\n' + s.old : s.old}]);
+      (s.jr||[]).forEach(e => { if(e.id > 0) acts.push(['UpdateRecord', T_COM, e.id, {Affectation: dup.id}]); });   // le journal suit
+      if(s.id > 0) acts.push(['RemoveRecord', T.AFF, s.id]);
+      fx.push(() => {
+        if(s.old && s.old !== dup.old) dup.old = dup.old ? dup.old + '\n' + s.old : s.old;
+        dup.jr = [...(dup.jr||[]), ...(s.jr||[])]; recom(dup); rmFrom(L, [s]);
+      });
+    }
+    else { if(s.id > 0) acts.push(['UpdateRecord', T.AFF, s.id, {Trimestre:o.to}]); fx.push(() => { s.q = o.to; }); }
+  }
+  else if(o.k==='com'){
+    const a = at(o.q)[0];
+    if(!a) acts.conflict = true;
+    else if(o.journal){
+      if(!(a.jr||[]).some(e => e.txt === o.txt)){                // déjà présent : renvoi après coupure
+        if(a.id > 0) acts.push(['AddRecord', T_COM, null, {Affectation:a.id, Texte:o.txt}]);
+        fx.push(() => { a.jr = [...(a.jr||[]), {id:-1, aff:a.id, txt:o.txt, auteur:'Envoi en attente', date:null}]; recom(a); });
+      }
+    }
+    else if(a.old !== o.txt){
+      if(a.id > 0) acts.push(['UpdateRecord', T.AFF, a.id, {Commentaire:o.txt}]);
+      fx.push(() => { a.old = o.txt; recom(a); });
+    }
+  }
+  return { acts, fx: () => fx.forEach(f => f()) };
+}
+function planQuo(o, Lq){
+  const acts = [];
+  Q.forEach((q,i) => {
+    const v = o.vals[i], cur = Lq.filter(r => r.g===o.g && r.q===q);
+    if(v === '') cur.forEach(r => acts.push(['RemoveRecord', T_QUO, r.id]));
+    else if(!cur.length) acts.push(['AddRecord', T_QUO, null, {Groupement:o.g, Trimestre:q, Pourcentage:Math.round(+v)/100}]);
+    else cur.forEach(r => { if(r.v !== Math.round(+v)) acts.push(['UpdateRecord', T_QUO, r.id, {Pourcentage:Math.round(+v)/100}]); });
+  });
+  return acts;
+}
+function applyLocal(o){
+  if(o.k === 'quo'){
+    quot[o.g] ||= {};
+    Q.forEach((q,i) => { const v = o.vals[i];
+      if(v === '') delete quot[o.g][q]; else quot[o.g][q] = {id:(quot[o.g][q]||{}).id || -1, v:Math.round(+v)}; });
+  }
+  else planOp(o, affs).fx();
+}
+// Affiche la modification tout de suite, la met en file, puis tente l'envoi
+function enqueue(ops){
+  ops = (ops||[]).filter(Boolean); if(!ops.length) return;
+  ops.forEach(o => { try{ applyLocal(o); }catch(e){ console.error(e); } OUTBOX.push(o); });
+  saveOutbox(); reindex(); render(); netBar();
+  flush();
+}
+// Deux postes qui ajoutent la même affectation à la même seconde peuvent créer un doublon :
+// après l'envoi, on garde la plus ancienne (même règle sur tous les postes) et on retire les autres
+// si elles n'ont pas de commentaire.
+async function dedupe(o){
+  try{
+    const L = buildAffs(await gFetch(T.AFF), []).filter(a => sameKey(a, o) && a.q===(o.k==='mv' ? o.to : o.q)).sort((x,y) => x.id - y.id);
+    const extra = L.slice(1).filter(a => !a.old);
+    if(!extra.length) return;
+    const jc = await gFetch(T_COM).catch(() => null), used = new Set(buildJournal(jc).map(e => e.aff));
+    const rm = extra.filter(a => !used.has(a.id)).map(a => ['RemoveRecord', T.AFF, a.id]);
+    if(rm.length) await gApply(rm);
+  }catch(e){ console.warn('Contrôle des doublons non effectué :', e.message || e); }   // un autre poste l'a peut-être déjà fait
+}
+// Envoie la file dans l'ordre ; chaque élément est recalculé sur les données à jour du serveur
+async function flush(){
+  if(flushing || !OUTBOX.length || !serverLoaded) return;
+  flushing = true; clearTimeout(flushTimer); netBar();
+  let netFail = false;
+  while(OUTBOX.length){
+    const o = OUTBOX[0];
+    try{
+      let acts;
+      if(o.k === 'quo'){
+        const qd = await gFetch(T_QUO);
+        acts = planQuo(o, qd.id.map((id,i) => { const v = qd.Pourcentage[i];
+          return {id, g:qd.Groupement[i], q:qd.Trimestre[i], v:(v === null || v === '' || isNaN(+v)) ? null : Math.round(+v*100)}; }));
+      } else {
+        const [a, jc] = await Promise.all([gFetch(T.AFF), gFetch(T_COM).catch(e => { if(isNetErr(e)) throw e; return null; })]);
+        acts = planOp(o, buildAffs(a, buildJournal(jc))).acts;
+        if(acts.conflict) NET.rejected.push(opLabel(o) + ' : élément modifié ou retiré entre-temps');
+      }
+      if(acts.length){
+        await gApply(acts);
+        if(o.k==='add' || o.k==='mv') await dedupe(o);
+      }
+    }catch(err){
+      if(isNetErr(err)){ netFail = true; break; }       // on garde l'élément et on réessaiera
+      console.error(err); NET.rejected.push(opLabel(o) + ' : ' + err.message);
+    }
+    OUTBOX.shift(); saveOutbox();
+    NET.online = true; NET.lastOk = Date.now(); netBar();
+  }
+  flushing = false;
+  if(netFail){
+    NET.online = false; netBar();
+    flushTimer = setTimeout(flush, flushDelay); flushDelay = Math.min(flushDelay * 2, 30000);
+    return;
+  }
+  flushDelay = 2000; netBar();
   await loadAll();
 }
 const tmpAff = (prj, grp, col, q, imp) => ({id:-(Date.now() + Math.random()), prj, grp, col, q, imp, old:'', jr:[], com:''});
@@ -733,7 +973,7 @@ async function moveProject(prjId, from, to, copy){
   if(to === null){
     const src = kAffs(prjId, from);
     if(src.length && confirm(`Retirer « ${p.nom} » de ${from} (${src.length} affectation(s)) ?`) && confirmCom(src))
-      await actOpt(rmAffs(src), () => { affs = affs.filter(a => !src.includes(a)); });
+      enqueue(uniq(src.map(a => opOf('rm', a, {q:from}))));
     return;
   }
   // Première planification
@@ -745,34 +985,19 @@ async function moveProject(prjId, from, to, copy){
     }
     else if(F.col && hasCollab){ col = F.col; grp = (collabs.find(c=>c.id===col)||{}).grp || grp; }
     if(!grp){ alert("Ce projet n'a pas de groupement porteur : ouvrez sa fiche pour l'affecter."); return; }
-    await actOpt([addAff(prjId, grp, col, to, 'Faible')], () => affs.push(tmpAff(prjId, grp, col, to, 'Faible')));
+    enqueue([{k:'add', prj:prjId, grp, col, q:to, imp:'Faible'}]);
     return;
   }
   // Déplacement ou copie entre trimestres (affectations visibles avec le filtre actif)
   const src = kAffs(prjId, from);
-  const actions = [], locals = [];
-  src.forEach(s => {
-    const dup = affsOf(prjId).find(a => a.grp===s.grp && a.col===s.col && a.q===to);
-    if(copy){ if(!dup) locals.push(() => affs.push(tmpAff(prjId, s.grp, s.col, to, s.imp))); }
-    else if(dup) locals.push(() => { affs = affs.filter(a => a !== s); if(s.com) dup.com = [dup.com, s.com].filter(Boolean).join('\n'); });
-    else locals.push(() => { s.q = to; });
-    if(copy){ if(!dup) actions.push(addAff(prjId, s.grp, s.col, to, s.imp)); }
-    else if(dup){
-      if(s.old && s.old !== dup.old)
-        actions.push(['UpdateRecord', T.AFF, dup.id, {Commentaire: dup.old ? dup.old + '\n' + s.old : s.old}]);
-      (s.jr||[]).forEach(e => actions.push(['UpdateRecord', T_COM, e.id, {Affectation: dup.id}]));  // le journal suit
-      actions.push(['RemoveRecord', T.AFF, s.id]);
-    }
-    else actions.push(['UpdateRecord', T.AFF, s.id, {Trimestre:to}]);
-  });
-  await actOpt(actions, () => locals.forEach(fn => fn()));
+  enqueue(uniq(src.map(a => copy ? opOf('add', a, {q:to, imp:a.imp}) : opOf('mv', a, {from, to}))));
 }
 // Bascule faible <-> fort pour un groupement sur un trimestre (toutes ses affectations)
 async function toggleImpact(prjId, q, grp){
-  const l = affsOf(prjId).filter(a => a.q===q && a.grp===grp && a.id > 0);
+  const l = affsOf(prjId).filter(a => a.q===q && a.grp===grp);
   if(!l.length) return;
   const imp = l.some(a => a.imp==='Fort') ? 'Faible' : 'Fort';
-  await actOpt(l.map(a => ['UpdateRecord', T.AFF, a.id, {Impact:imp}]), () => l.forEach(a => a.imp = imp));
+  enqueue([{k:'imp', prj:prjId, grp, col:null, q, imp}]);
 }
 if(K.sort==='dd') K.sort = 'prio';
 const kSort = {
@@ -872,15 +1097,15 @@ function renderModal(){
     const cyc = () => {
       const g = +td.dataset.g, q = Q[+td.dataset.qi];
       const a = pa.find(x=>x.grp===g && !x.col && x.q===q);
-      if(!a) act([addAff(p.id, g, 0, q, 'Faible')]);
-      else if(a.imp==='Faible') act([['UpdateRecord', T.AFF, a.id, {Impact:'Fort'}]]);
-      else if(confirmCom([a])) act(rmAffs([a]));
+      if(!a) enqueue([{k:'add', prj:p.id, grp:g, col:0, q, imp:'Faible'}]);
+      else if(a.imp==='Faible') enqueue([opOf('imp', a, {imp:'Fort'})]);
+      else if(confirmCom([a])) enqueue([opOf('rm', a)]);
     };
     td.onclick = cyc; td.onkeydown = e => { if(e.key==='Enter'||e.key===' '){ e.preventDefault(); cyc(); } };
   });
   m.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
     const a = affs.find(x=>x.id===+b.dataset.del);
-    if(a && confirmCom([a])) act(rmAffs([a]));
+    if(a && confirmCom([a])) enqueue([opOf('rm', a)]);
   });
   m.querySelectorAll('[data-com]').forEach(b => b.onclick = e => {
     e.stopPropagation(); comEdit = +b.dataset.com; renderModal();
@@ -890,21 +1115,21 @@ function renderModal(){
     const saveCom = v => {
       if(hasJournal){
         if(!v){ $('#comTxt').focus(); return; }
-        act([['AddRecord', T_COM, null, {Affectation: ce.id, Texte: v}]]);   // le journal reste ouvert
-      } else { comEdit = null; act([['UpdateRecord', T.AFF, ce.id, {Commentaire: v}]]); }
+        enqueue([opOf('com', ce, {txt:v, journal:true})]);   // le journal reste ouvert
+      } else { comEdit = null; enqueue([opOf('com', ce, {txt:v, journal:false})]); }
     };
     $('#comSave').onclick = () => saveCom($('#comTxt').value.trim());
     $('#comCancel').onclick = () => { comEdit = null; renderModal(); };
   }
   m.querySelectorAll('[data-cyc]').forEach(b => b.onclick = () => {
     const a = affs.find(x=>x.id===+b.dataset.cyc);
-    act([['UpdateRecord', T.AFF, a.id, {Impact: a.imp==='Fort' ? 'Faible' : 'Fort'}]]);
+    if(a) enqueue([opOf('imp', a, {imp: a.imp==='Fort' ? 'Faible' : 'Fort'})]);
   });
   if($('#nAdd')) $('#nAdd').onclick = () => {
     const col = +$('#nCol').value, q = $('#nQ').value, imp = $('#nImp').value;
     const c = collabs.find(x=>x.id===col); if(!c) return;
     if(pa.some(a=>a.col===col && a.q===q)){ alert('Ce collaborateur est déjà affecté sur ce trimestre.'); return; }
-    act([addAff(p.id, c.grp, col, q, imp)]);
+    enqueue([{k:'add', prj:p.id, grp:c.grp, col, q, imp}]);
   };
 }
 document.addEventListener('keydown', e => { if(e.key==='Escape' && modalPrj) closeModal(); });
@@ -981,15 +1206,9 @@ async function saveQuo(){
   const g = QU.grp; if(!g) return;
   const vals = [...document.querySelectorAll('.quo input[data-qi]')].map(x => x.value.trim());
   if(vals.some(v => v !== '' && !(+v >= 0 && +v <= 100))){ QU.err = 'Saisissez un pourcentage entre 0 et 100, ou laissez la case vide.'; QU.draft = vals; render(); return; }
-  const actions = [];
-  Q.forEach((q,i) => {
-    const cur = quot[g] && quot[g][q], v = vals[i];
-    if(v === '') { if(cur) actions.push(['RemoveRecord', T_QUO, cur.id]); }
-    else if(!cur) actions.push(['AddRecord', T_QUO, null, {Groupement:g, Trimestre:q, Pourcentage:Math.round(+v)/100}]);
-    else if(cur.v !== Math.round(+v)) actions.push(['UpdateRecord', T_QUO, cur.id, {Pourcentage:Math.round(+v)/100}]);
-  });
   QU.draft = null; QU.err = '';
-  if(actions.length) await act(actions); else render();
+  const changed = Q.some((q,i) => { const cur = quotOf(g,q), v = vals[i]; return v === '' ? cur !== null : cur !== Math.round(+v); });
+  if(changed) enqueue([{k:'quo', g, vals}]); else render();
 }
 
 /* ================= États groupement / collaborateur ================= */
@@ -1427,7 +1646,7 @@ async function runSync(){
   try{
     const ids = new Map();
     if(r.addActs.length){
-      const res = await grist.docApi.applyUserActions(r.addActs.map(e => ['AddRecord', T_ACT, null, only({
+      const res = await gApply(r.addActs.map(e => ['AddRecord', T_ACT, null, only({
         Libelle:e.libelle, Projet:e.prj, Groupement:e.grp, Date_debut:e.debut, Date_echeance:e.fin,
         Impact:e.imp, Collaborateurs:e.colsTxt, Synchro:''}, colsAct)]));
       r.addActs.forEach((e, i) => ids.set(e, res.retValues[i]));
@@ -1440,7 +1659,7 @@ async function runSync(){
         Periode:x.b.label, Statut:ST_DEFAUT}, colsTac)]),
       ...r.updTasks.map(([id,f]) => ['UpdateRecord', T_TAC, id, f])
     ];
-    if(acts.length) await grist.docApi.applyUserActions(acts);
+    if(acts.length) await gApply(acts);
     await loadAll();
     alert('Actions et tâches mises à jour.');
   }catch(err){
@@ -1967,7 +2186,8 @@ function bindVE(){
 // SM_Seance (une ligne : Tour_actif, Debut_tour, Duree_min, Etat, Message)
 const T_SMP = 'SM_Participants', T_SMR = 'SM_Rotations', T_SMS = 'SM_Seance';
 const SM_LIBRE = 'Tour libre — pause café';
-const SM_POLL_MS = 3000;
+const SM_POLL_MS = 3000;                          // séance en cours ou en pause
+const SM_IDLE_MS = 10000;                         // pas de séance active
 let smParts = [], smRots = [], hasSM = false, smSeance = null, smSeenInit = false, smSeen = null;
 const SMU = { tour:1, duree:20, excl:true };           // état de l'écran d'administration
 // Mémoire du poste (localStorage), avec repli en mémoire si le navigateur le bloque
@@ -2100,19 +2320,44 @@ document.addEventListener('visibilitychange', () => { if(!document.hidden) pollS
 // ---- télécommande : lecture périodique ----
 function smRemaining(){
   const S2 = smSeance; if(!S2) return 0;
-  if(S2.etat !== 'En cours' || !S2.debut) return Math.round((S2.duree||0)*60);
-  return Math.max(0, Math.round(S2.debut + (S2.duree||0)*60 - Date.now()/1000));
+  const tot = Math.round((S2.duree||0)*60), d = S2.debutLocal ?? S2.debut;
+  if(S2.etat !== 'En cours' || !d) return tot;
+  return Math.min(tot, Math.max(0, Math.round(d + tot - Date.now()/1000)));
 }
 const mmss = sec => String(Math.floor(sec/60)).padStart(2,'0') + ':' + String(sec%60).padStart(2,'0');
+// Une seule lecture à la fois ; en cas d'échec réseau, la séance affichée est conservée
+let smPolling = false, smAgain = false, smFail = 0, smTimer = null;
 async function pollSeance(){
+  if(smPolling){ smAgain = true; return; }
+  smPolling = true;
+  try{ await pollSeance0(); }catch(e){ console.warn(e); }
+  smPolling = false;
+  if(smAgain){ smAgain = false; pollSeance(); }
+}
+function smSchedule(){
+  clearTimeout(smTimer);
+  const active = smSeance && ['En cours','Pause'].includes(smSeance.etat);
+  const delay = Math.min((active ? SM_POLL_MS : SM_IDLE_MS) * Math.pow(2, Math.min(smFail, 4)), 30000);
+  smTimer = setTimeout(async () => { await pollSeance(); smSchedule(); }, delay);
+}
+async function pollSeance0(){
   if(!hasSM) { smSeance = null; smBar(); smSeenInit = !!loadSeqDone(); return; }
   let t = null;
-  try{ t = await grist.docApi.fetchTable(T_SMS); }catch(e){ t = null; }
+  const wasOk = smFail === 0;
+  try{ t = await gFetch(T_SMS); smFail = 0; }
+  catch(e){ smFail++; if(isNetErr(e)) return; t = null; }
   if(!t || !t.id.length){ smSeance = null; smBar(); smSeenInit = true; return; }
   const n = smSeance;
   smSeance = { id:t.id[0], tour:+(t.Tour_actif ? t.Tour_actif[0] : 0) || 0, debut: smTime(t.Debut_tour ? t.Debut_tour[0] : null),
                duree: t.Duree_min ? +t.Duree_min[0] || 0 : 20, etat: t.Etat ? (t.Etat[0] || 'Préparation') : 'Préparation',
                msg: t.Message ? (t.Message[0] || '') : '' };
+  // Début du tour sur l'horloge de ce poste : si le changement vient d'être reçu et que l'heure
+  // de l'animateur paraît décalée, le tour démarre à la réception
+  if(n && n.debut === smSeance.debut) smSeance.debutLocal = n.debutLocal;
+  else if(smSeance.debut){
+    const el = Date.now()/1000 - smSeance.debut;
+    smSeance.debutLocal = (smSeenInit && n && wasOk && (el < -5 || el > 60)) ? Date.now()/1000 : smSeance.debut;
+  }
   smBar();
   // Affichage automatique quand le tour, l'état ou le message change
   const key = `${smSeance.tour}|${smSeance.etat}|${smSeance.msg}`;
@@ -2121,7 +2366,7 @@ async function pollSeance(){
     smSeen = key;
     // programme à jour avant d'afficher (il a pu être modifié depuis le dernier chargement)
     try{
-      const [smp, smr] = await Promise.all([T_SMP, T_SMR].map(x => grist.docApi.fetchTable(x)));
+      const [smp, smr] = await Promise.all([T_SMP, T_SMR].map(x => gFetch(x)));
       loadSM(smp, smr);
     }catch(e){ console.warn(e); }
     const changedTour = !n || n.tour !== smSeance.tour || n.etat !== smSeance.etat;
@@ -2139,7 +2384,7 @@ function smTime(v){
   if(Array.isArray(v) && typeof v[1] === 'number') return v[1];      // valeur encodée Grist ['d', …]
   const ms = Date.parse(v); return isNaN(ms) ? null : Math.round(ms/1000);
 }
-const loadSeqDone = () => loadSeq > 0 && !pending;
+const loadSeqDone = () => loadSeq > 0 && !flushing;
 function smLine(me, tour){
   const ro = smRole(me, tour);
   if(ro.type==='vis') return {titre:'Changez de table', texte:`Vous avez rendez-vous avec <b>${esc(smName(ro.autre))}</b>`, big:`Table ${esc(smName(ro.autre))}`, court:`Allez à la table ${smName(ro.autre)}`};
@@ -2180,7 +2425,6 @@ function smBar(){
   $('#smBarOpen').onclick = smShowOverlay;
   if($('#smBarSound')) $('#smBarSound').onclick = smEnableSound;
 }
-setInterval(pollSeance, SM_POLL_MS);
 setInterval(() => {
   if(!smSeance) return;
   const txt = smSeance.etat==='Pause' ? 'Pause' : smRemaining() ? mmss(smRemaining()) : 'Temps écoulé';
@@ -2191,8 +2435,8 @@ setInterval(() => {
 async function smSetSeance(fields){
   if(!await requireAdmin()) return;
   try{
-    if(smSeance && smSeance.id) await grist.docApi.applyUserActions([['UpdateRecord', T_SMS, smSeance.id, fields]]);
-    else await grist.docApi.applyUserActions([['AddRecord', T_SMS, null, Object.assign({Tour_actif:1, Duree_min:SMU.duree, Etat:'Préparation', Message:''}, fields)]]);
+    if(smSeance && smSeance.id) await gApply([['UpdateRecord', T_SMS, smSeance.id, fields]]);
+    else await gApply([['AddRecord', T_SMS, null, Object.assign({Tour_actif:1, Duree_min:SMU.duree, Etat:'Préparation', Message:''}, fields)]]);
   }catch(err){ alert("Écriture impossible dans SM_Seance : " + err.message); }
   await pollSeance();
 }
@@ -2361,13 +2605,13 @@ function bindSM(){
 /* ================= Rafraîchissement automatique ================= */
 // Ignoré si : onglet masqué, glisser en cours, fiche projet ouverte, ou liste/saisie en cours d'utilisation
 setInterval(() => {
-  if(document.hidden || dragging || modalPrj || pwdOpen || pending) return;
+  if(document.hidden || dragging || modalPrj || pwdOpen || flushing) return;
   const el = document.activeElement;
   if(el && /^(SELECT|INPUT|TEXTAREA)$/.test(el.tagName)) return;
   loadAll(true);
 }, REFRESH_MS);
 
-loadAll();
+netInit();
 </script>
 </body>
 </html>
